@@ -195,7 +195,8 @@
       getUser: () => ipcRenderer.invoke('get-user'),
       logout: () => ipcRenderer.invoke('logout'),
       navigate: (page) => ipcRenderer.send('navigate', page),
-      startAgent: (cfg) => ipcRenderer.send('start-agent', cfg)
+      startAgent: (cfg) => ipcRenderer.send('start-agent', cfg),
+      startGoogleAuth: () => ipcRenderer.invoke('start-google-auth')
     };
 
     document.getElementById("btn-minimize").addEventListener("click", () => ipcRenderer.send("window-minimize"));
@@ -203,61 +204,40 @@
     document.getElementById("btn-close").addEventListener("click",    () => ipcRenderer.send("window-close"));
   </script>
 
-  <script type="module">
-    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-    import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
-
-    const firebaseConfig = {
-      apiKey: "AIzaSyCI_KpsrIMHGdmeZ_SRBYtpE6JLzE4yTPg",
-      authDomain: "airgpu-928f3.firebaseapp.com",
-      projectId: "airgpu-928f3",
-      storageBucket: "airgpu-928f3.firebasestorage.app",
-      messagingSenderId: "450670816358",
-      appId: "1:450670816358:web:6d4679efa0a458a680d1a7",
-      measurementId: "G-2SWH0KWZ4R"
-    };
-
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const provider = new GoogleAuthProvider();
-
+  <script>
     const btn = document.getElementById("login-google");
     const errorMsg = document.getElementById("error-msg");
 
-    onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        const idToken = await user.getIdToken();
-        await window.electronAPI.setAuthToken(idToken);
+    btn.addEventListener("click", async function() {
+      btn.disabled = true;
+      btn.innerText = 'Opening browser...';
+      errorMsg.style.display = 'none';
+      try {
+        const result = await window.electronAPI.startGoogleAuth();
         await window.electronAPI.setUser({
-          displayName: user.displayName,
-          email: user.email,
-          photoURL: user.photoURL
+          displayName: result.displayName,
+          email: result.email,
+          photoURL: result.photoURL
         });
+        await window.electronAPI.setAuthToken(result.token);
         
         setInterval(async () => {
-            try {
-                const token = await user.getIdToken(true);
-                window.electronAPI.setAuthToken(token);
-            } catch (e) {}
+          try {
+            const result = await window.electronAPI.startGoogleAuth();
+            await window.electronAPI.setAuthToken(result.token);
+          } catch(e) {}
         }, 55 * 60 * 1000);
 
         window.electronAPI.navigate('index.html');
-      }
-    });
-
-    btn.addEventListener("click", async () => {
-      errorMsg.style.display = "none";
-      const originalText = btn.innerHTML;
-      btn.innerHTML = "Signing in...";
-      btn.disabled = true;
-
-      try {
-        await signInWithPopup(auth, provider);
-      } catch (err) {
-        console.error(err);
-        btn.innerHTML = originalText;
+      } catch (e) {
         btn.disabled = false;
-        errorMsg.style.display = "block";
+        btn.innerHTML = '<svg viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg> Continue with Google';
+        errorMsg.style.display = 'block';
+        if (e.message && e.message.includes("busy")) {
+            errorMsg.innerText = e.message;
+        } else {
+            errorMsg.innerText = 'Sign in failed \u2014 please try again';
+        }
       }
     });
   </script>
