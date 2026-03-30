@@ -5,6 +5,7 @@ import json
 from typing import Dict, Optional
 from collections import deque
 import time
+import asyncio
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,15 +13,19 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 import firebase_admin
-from firebase_admin import credentials, auth as firebase_auth
+from firebase_admin import credentials, auth as firebase_auth, db as firebase_db
 
 from scanner import scan_code, format_scan_result
+
+COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP", "http://localhost:8000")
 
 SERVICE_ACCOUNT_PATH = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "serviceAccount.json")
 
 if os.path.exists(SERVICE_ACCOUNT_PATH):
     cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
-    firebase_admin.initialize_app(cred)
+    firebase_admin.initialize_app(cred, {
+        "databaseURL": "https://airgpu-928f3-default-rtdb.asia-southeast1.firebasedatabase.app"
+    })
     AUTH_ENABLED = True
     print("[coordinator] Firebase auth enabled")
 else:
@@ -74,6 +79,7 @@ class Job:
         self.script = script
         self.requirements = requirements
         self.use_gpu = use_gpu
+        self.submitter_uid: str = ""
         self.submitter_email: str = ""
         self.done = False
         self.status = "pending"
@@ -88,20 +94,145 @@ contributors: Dict[int, ContributorConnection] = {}
 jobs: Dict[str, Job] = {}
 submitter_connections: Dict[str, WebSocket] = {}
 pending_jobs: deque = deque()
-contributor_history: Dict[str, list] = {}
 
-def make_job_record(job_id, submitter_email, duration_seconds, cpu_cores, ram_gb, used_gpu, gpu_name, script_lines):
-    return {
-        "job_id": job_id[:8],
-        "submitter_email": submitter_email,
-        "duration_seconds": duration_seconds,
-        "cpu_cores": cpu_cores,
-        "ram_gb": ram_gb,
-        "used_gpu": used_gpu,
-        "gpu_name": gpu_name or "none",
-        "script_lines": script_lines,
-        "completed_at": time.time(),
-    }
+async def db_upsert_user(uid: str, email: str, display_name: str):
+    def _write():
+        ref = firebase_db.reference(f"/users/{uid}")
+        existing = ref.get()
+        if existing:
+            ref.update({
+                "last_seen": time.time(),
+                "email": email,
+                "displayName": display_name,
+            })
+        else:
+            ref.set({
+                "uid": uid,
+                "email": email,
+                "displayName": display_name,
+                "first_seen": time.time(),
+                "last_seen": time.time(),
+                "total_jobs_submitted": 0,
+                "total_jobs_contributed": 0,
+            })
+    try:
+        await asyncio.to_thread(_write)
+    except Exception as e:
+        print(f"[db] upsert_user failed: {e}")
+
+async def db_create_job(job: "Job", submitter_uid: str, submitter_email: str):
+    def _write():
+        firebase_db.reference(f"/jobs/{job.job_id}").set({
+            "job_id": job.job_id,
+            "submitter_uid": submitter_uid,
+            "submitter_email": submitter_email,
+            "contributor_node_id": None,
+            "contributor_uid": None,
+            "status": "pending",
+            "use_gpu": job.use_gpu,
+            "gpu_name": None,
+            "script_lines": len(job.script.splitlines()),
+            "requirements_lines": len(job.requirements.splitlines()) if job.requirements else 0,
+            "submitted_at": job.submitted_at,
+            "started_at": None,
+            "completed_at": None,
+            "duration_seconds": None,
+            "cpu_cores": None,
+            "ram_gb": None,
+            "cpu_time_seconds": None,
+            "gpu_time_seconds": None,
+            "retry_count": 0,
+            "checkpoint_epoch": 0,
+        })
+        firebase_db.reference(f"/users/{submitter_uid}/total_jobs_submitted").transaction(
+            lambda current: (current or 0) + 1
+        )
+    try:
+        await asyncio.to_thread(_write)
+    except Exception as e:
+        print(f"[db] create_job failed: {e}")
+
+async def db_job_started(job_id: str, contributor_node_id: str, contributor_uid: str, cpu_cores: float, ram_gb: int, gpu_name: str):
+    def _write():
+        firebase_db.reference(f"/jobs/{job_id}").update({
+            "status": "running",
+            "contributor_node_id": contributor_node_id,
+            "contributor_uid": contributor_uid,
+            "started_at": time.time(),
+            "cpu_cores": cpu_cores,
+            "ram_gb": ram_gb,
+            "gpu_name": gpu_name,
+        })
+    try:
+        await asyncio.to_thread(_write)
+    except Exception as e:
+        print(f"[db] job_started failed: {e}")
+
+async def db_job_completed(job_id: str, node_id: str, contributor_uid: str, duration: float, cpu_cores: float, ram_gb: int, use_gpu: bool, gpu_name: str):
+    cpu_time = round(cpu_cores * duration, 1)
+    gpu_time = round(duration, 1) if use_gpu else 0
+
+    def _write():
+        firebase_db.reference(f"/jobs/{job_id}").update({
+            "status": "complete",
+            "contributor_node_id": node_id,
+            "completed_at": time.time(),
+            "duration_seconds": duration,
+            "cpu_time_seconds": cpu_time,
+            "gpu_time_seconds": gpu_time,
+        })
+
+        contrib_ref = firebase_db.reference(f"/contributors/{node_id}")
+        existing = contrib_ref.get()
+        if existing:
+            contrib_ref.update({
+                "total_jobs_executed": (existing.get("total_jobs_executed") or 0) + 1,
+                "total_cpu_time_seconds": round((existing.get("total_cpu_time_seconds") or 0) + cpu_time, 1),
+                "total_gpu_time_seconds": round((existing.get("total_gpu_time_seconds") or 0) + gpu_time, 1),
+                "last_seen": time.time(),
+            })
+
+        if contributor_uid:
+            firebase_db.reference(f"/users/{contributor_uid}/total_jobs_contributed").transaction(
+                lambda current: (current or 0) + 1
+            )
+
+    try:
+        await asyncio.to_thread(_write)
+    except Exception as e:
+        print(f"[db] job_completed failed: {e}")
+
+async def db_upsert_contributor(node_id: str, uid: str, email: str, max_cpus: float, max_ram_gb: int, max_gpu_vram_mb: int, gpu_name: str):
+    def _write():
+        ref = firebase_db.reference(f"/contributors/{node_id}")
+        existing = ref.get()
+        if existing:
+            ref.update({
+                "last_seen": time.time(),
+                "max_cpus": max_cpus,
+                "max_ram_gb": max_ram_gb,
+                "max_gpu_vram_mb": max_gpu_vram_mb,
+                "gpu_name": gpu_name,
+            })
+        else:
+            ref.set({
+                "node_id": node_id,
+                "uid": uid,
+                "email": email,
+                "max_cpus": max_cpus,
+                "max_ram_gb": max_ram_gb,
+                "max_gpu_vram_mb": max_gpu_vram_mb,
+                "gpu_name": gpu_name,
+                "total_jobs_executed": 0,
+                "total_cpu_time_seconds": 0,
+                "total_gpu_time_seconds": 0,
+                "first_seen": time.time(),
+                "last_seen": time.time(),
+            })
+    try:
+        await asyncio.to_thread(_write)
+    except Exception as e:
+        print(f"[db] upsert_contributor failed: {e}")
 
 def score_contributor(conn, use_gpu: bool) -> float:
     if use_gpu:
@@ -139,8 +270,13 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
 
     job_id = str(uuid.uuid4())
     job = Job(job_id=job_id, script=req.script, requirements=req.requirements, use_gpu=req.use_gpu)
-    job.submitter_email = req.submitter_email or "anonymous"
+    submitter_uid = user.get("uid", "anonymous") if user else "anonymous"
+    submitter_email = user.get("email", "anonymous") if user else "anonymous"
+    job.submitter_uid = submitter_uid
+    job.submitter_email = submitter_email
     jobs[job_id] = job
+    asyncio.create_task(db_upsert_user(submitter_uid, submitter_email, user.get("name", "") if user else ""))
+    asyncio.create_task(db_create_job(job, submitter_uid, submitter_email))
 
     assigned = False
     available = [
@@ -164,9 +300,19 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
                 "requirements": job.requirements,
                 "use_gpu": job.use_gpu,
                 "resume_from_epoch": job.checkpoint_epoch,
-                "coordinator_url": f"http://0.0.0.0:8000",
+                "coordinator_url": COORDINATOR_HTTP,
             })
             assigned = True
+            
+            if best_conn.node_id:
+                asyncio.create_task(db_job_started(
+                    job_id,
+                    best_conn.node_id,
+                    "",
+                    best_conn.max_cpus,
+                    best_conn.max_ram_gb,
+                    best_conn.gpu_name or "",
+                ))
             
             sub_ws = submitter_connections.get(job_id)
             if sub_ws:
@@ -220,9 +366,19 @@ async def try_assign_pending():
                 "requirements": job.requirements,
                 "use_gpu": job.use_gpu,
                 "resume_from_epoch": job.checkpoint_epoch,
-                "coordinator_url": f"http://0.0.0.0:8000",
+                "coordinator_url": COORDINATOR_HTTP,
             })
             
+            if best_conn.node_id:
+                asyncio.create_task(db_job_started(
+                    job_id,
+                    best_conn.node_id,
+                    "",
+                    best_conn.max_cpus,
+                    best_conn.max_ram_gb,
+                    best_conn.gpu_name or "",
+                ))
+
             sub_ws = submitter_connections.get(job_id)
             if sub_ws:
                 try:
@@ -326,6 +482,7 @@ async def ws_contributor(ws: WebSocket):
             msg_type = msg.get("type")
 
             if msg_type == "heartbeat":
+                is_first_heartbeat = conn.node_id is None
                 conn.node_id = msg.get("node_id")
                 conn.cpu_free = msg.get("cpu_free", 0)
                 conn.ram_free = msg.get("ram_free", 0)
@@ -337,6 +494,23 @@ async def ws_contributor(ws: WebSocket):
                 conn.max_gpu_vram_mb = msg.get("max_gpu_vram_mb", 0)
                 conn.max_cpus = msg.get("max_cpus", 2.0)
                 conn.max_ram_gb = msg.get("max_ram_gb", 4)
+
+                if is_first_heartbeat and conn.node_id:
+                    token = ws.query_params.get("token")
+                    uid = "anonymous"
+                    email = "anonymous"
+                    if AUTH_ENABLED and token:
+                        try:
+                            decoded = firebase_auth.verify_id_token(token)
+                            uid = decoded.get("uid", "anonymous")
+                            email = decoded.get("email", "anonymous")
+                        except Exception:
+                            pass
+                    asyncio.create_task(db_upsert_contributor(
+                        conn.node_id, uid, email,
+                        conn.max_cpus, conn.max_ram_gb, conn.max_gpu_vram_mb, conn.gpu_name or ""
+                    ))
+
                 await try_assign_pending()
 
             elif msg_type == "log":
@@ -358,20 +532,20 @@ async def ws_contributor(ws: WebSocket):
                 if job_id in jobs:
                     jobs[job_id].done = True
                     jobs[job_id].status = "complete"
-                    duration = round(time.time() - jobs[job_id].submitted_at, 1)
-                    node_id = conn.node_id or str(id(conn))
-                    if node_id not in contributor_history:
-                        contributor_history[node_id] = []
-                    contributor_history[node_id].append(make_job_record(
-                        job_id=job_id,
-                        submitter_email=jobs[job_id].submitter_email,
-                        duration_seconds=duration,
-                        cpu_cores=conn.max_cpus if hasattr(conn, "max_cpus") else 2,
-                        ram_gb=conn.max_ram_gb if hasattr(conn, "max_ram_gb") else 4,
-                        used_gpu=jobs[job_id].use_gpu,
-                        gpu_name=conn.gpu_name,
-                        script_lines=len(jobs[job_id].script.splitlines()),
+                    
+                    job = jobs[job_id]
+                    duration = round(time.time() - job.submitted_at, 1)
+                    asyncio.create_task(db_job_completed(
+                        job_id,
+                        conn.node_id,
+                        "",
+                        duration,
+                        conn.max_cpus,
+                        conn.max_ram_gb,
+                        job.use_gpu,
+                        conn.gpu_name or "",
                     ))
+
                 conn.busy = False
                 conn.current_job = None
                 sub_ws = submitter_connections.get(job_id)
@@ -497,19 +671,45 @@ async def queue_status():
         ]
     }
 
-@app.get("/contributor-history/{node_id}")
-async def get_contributor_history(node_id: str):
-    history = contributor_history.get(node_id, [])
-    total_jobs = len(history)
-    total_cpu_hours = round(sum(r["cpu_cores"] * r["duration_seconds"] / 3600 for r in history), 2)
-    total_gpu_hours = round(sum(r["duration_seconds"] / 3600 for r in history if r["used_gpu"]), 2)
-    return {
-        "node_id": node_id,
-        "total_jobs": total_jobs,
-        "total_cpu_hours": total_cpu_hours,
-        "total_gpu_hours": total_gpu_hours,
-        "jobs": list(reversed(history)),
-    }
+@app.get("/db/contributor/{node_id}")
+async def get_contributor_stats(node_id: str):
+    def _read():
+        return firebase_db.reference(f"/contributors/{node_id}").get()
+    try:
+        data = await asyncio.to_thread(_read)
+        return data or {}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/db/contributor/{node_id}/jobs")
+async def get_contributor_jobs(node_id: str):
+    def _read():
+        all_jobs = firebase_db.reference("/jobs").get()
+        if not all_jobs:
+            return []
+        matched = [
+            v for v in all_jobs.values()
+            if v.get("contributor_node_id") == node_id
+        ]
+        matched.sort(key=lambda x: x.get("completed_at") or 0, reverse=True)
+        return matched[:50]
+    try:
+        data = await asyncio.to_thread(_read)
+        return {"jobs": data}
+    except Exception as e:
+        return {"jobs": [], "error": str(e)}
+
+
+@app.get("/db/user/{uid}")
+async def get_user_stats(uid: str):
+    def _read():
+        return firebase_db.reference(f"/users/{uid}").get()
+    try:
+        data = await asyncio.to_thread(_read)
+        return data or {}
+    except Exception as e:
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

@@ -50,43 +50,62 @@ async function fetchAndRenderHistory() {
     if (!nodeId) return;
 
     try {
-        const coordinatorHttp = coordinatorUrl.replace("ws://", "http://").replace("/ws/contributor", "");
-        const res = await fetch(`${coordinatorHttp}/contributor-history/${nodeId}`);
-        if (!res.ok) return;
-        const data = await res.json();
+        const wsUrl = new URL(coordinatorUrl);
+        const base = `http://${wsUrl.host}`;
 
-        document.getElementById("history-count").textContent = `${data.total_jobs} job${data.total_jobs !== 1 ? "s" : ""} completed`;
-        document.getElementById("cpu-hours").textContent = `${data.total_cpu_hours}h`;
-        document.getElementById("gpu-hours").textContent = `${data.total_gpu_hours}h`;
+        const [statsRes, jobsRes] = await Promise.all([
+            fetch(`${base}/db/contributor/${nodeId}`),
+            fetch(`${base}/db/contributor/${nodeId}/jobs`)
+        ]);
+
+        const stats = await statsRes.json();
+        const jobsData = await jobsRes.json();
+        const jobsList = jobsData.jobs || [];
+
+        console.log("[history] stats:", stats);
+        console.log("[history] jobs:", jobsList);
+
+        const totalJobs = stats.total_jobs_executed || 0;
+        const cpuHours = ((stats.total_cpu_time_seconds || 0) / 3600).toFixed(2);
+        const gpuHours = ((stats.total_gpu_time_seconds || 0) / 3600).toFixed(2);
+
+        document.getElementById("history-count").textContent =
+            `${totalJobs} job${totalJobs !== 1 ? "s" : ""} completed`;
+        document.getElementById("cpu-hours").textContent = `${cpuHours}h`;
+        document.getElementById("gpu-hours").textContent = `${gpuHours}h`;
 
         const list = document.getElementById("history-list");
 
-        if (data.jobs.length === 0) {
-            list.innerHTML = `<div id="history-empty">No jobs completed yet \u2014 waiting for work...</div>`;
+        if (!jobsList || jobsList.length === 0) {
+            list.innerHTML = `<div id="history-empty">No jobs completed yet — waiting for work...</div>`;
             return;
         }
 
         list.innerHTML = "";
-        data.jobs.forEach((job, i) => {
+        jobsList.forEach((job, i) => {
             const row = document.createElement("div");
             row.className = "history-row";
             row.style.animationDelay = `${i * 0.05}s`;
 
-            const gpuTag = job.used_gpu
-                ? `<span class="resource-tag gpu-tag">GPU \u00B7 ${job.gpu_name}</span>`
+            const gpuTag = job.use_gpu
+                ? `<span class="resource-tag gpu-tag">GPU · ${job.gpu_name || "GPU"}</span>`
                 : `<span class="resource-tag">No GPU</span>`;
+
+            const duration = job.duration_seconds != null ? `${job.duration_seconds}s` : "—";
+            const cpuTime = job.cpu_time_seconds != null ? `${job.cpu_time_seconds}s CPU` : "";
 
             row.innerHTML = `
                 <div class="history-row-top">
-                    <span class="job-id">job #${job.job_id}</span>
-                    <span class="submitter-email">${job.submitter_email}</span>
-                    <span class="job-duration">${job.duration_seconds}s</span>
+                    <span class="job-id">job #${job.job_id.slice(0, 8)}</span>
+                    <span class="submitter-email">${job.submitter_email || "anonymous"}</span>
+                    <span class="job-duration">${duration}</span>
                 </div>
                 <div class="history-row-bottom">
-                    <span class="resource-tag">CPU \u00B7 ${job.cpu_cores} cores</span>
-                    <span class="resource-tag">RAM \u00B7 ${job.ram_gb}GB</span>
+                    <span class="resource-tag">CPU · ${job.cpu_cores || "?"} cores</span>
+                    <span class="resource-tag">RAM · ${job.ram_gb || "?"}GB</span>
                     ${gpuTag}
-                    <span class="resource-tag lines-tag">${job.script_lines} lines</span>
+                    <span class="resource-tag">${job.script_lines || "?"} lines</span>
+                    ${cpuTime ? `<span class="resource-tag">${cpuTime}</span>` : ""}
                 </div>
             `;
             list.appendChild(row);
