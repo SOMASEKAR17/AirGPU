@@ -19,19 +19,34 @@ from scanner import scan_code, format_scan_result
 
 COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP", "http://localhost:8000")
 
-SERVICE_ACCOUNT_PATH = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "serviceAccount.json")
+import json
 
-if os.path.exists(SERVICE_ACCOUNT_PATH):
+SERVICE_ACCOUNT_PATH = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "serviceAccount.json")
+SERVICE_ACCOUNT_JSON = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+
+if SERVICE_ACCOUNT_JSON:
+    try:
+        service_account_info = json.loads(SERVICE_ACCOUNT_JSON)
+        cred = credentials.Certificate(service_account_info)
+        firebase_admin.initialize_app(cred, {
+            "databaseURL": "https://airgpu-928f3-default-rtdb.asia-southeast1.firebasedatabase.app"
+        })
+        AUTH_ENABLED = True
+        print("[coordinator] Firebase auth enabled via environment variable")
+    except Exception as e:
+        print(f"[coordinator] Failed to initialize Firebase from environment variable: {e}")
+        AUTH_ENABLED = False
+elif os.path.exists(SERVICE_ACCOUNT_PATH):
     cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
     firebase_admin.initialize_app(cred, {
         "databaseURL": "https://airgpu-928f3-default-rtdb.asia-southeast1.firebasedatabase.app"
     })
     AUTH_ENABLED = True
-    print("[coordinator] Firebase auth enabled")
+    print("[coordinator] Firebase auth enabled via serviceAccount.json")
 else:
     firebase_admin.initialize_app()
     AUTH_ENABLED = False
-    print("[coordinator] Firebase auth disabled — serviceAccount.json not found")
+    print("[coordinator] Firebase auth disabled — serviceAccount.json or environment variable not found")
 
 async def optional_verify_token(credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer(auto_error=False))):
     if not AUTH_ENABLED:
