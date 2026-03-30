@@ -32,8 +32,8 @@ document.getElementById("btn-maximize").addEventListener("click", () => ipcRende
 document.getElementById("btn-close").addEventListener("click",    () => ipcRenderer.send("window-close"));
 document.getElementById("btn-back").addEventListener("click",     () => ipcRenderer.send("go-home"));
 
-const COORDINATOR_HTTP = "http://10.212.87.185:8000";
-const COORDINATOR_WS   = "ws://10.212.87.185:8000";
+const COORDINATOR_HTTP = "http://hopper.proxy.rlwy.net:32592";
+const COORDINATOR_WS   = "ws://hopper.proxy.rlwy.net:32592";
 
 let selectedFilePath = null;
 let selectedFileContents = null;
