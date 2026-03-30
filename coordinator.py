@@ -95,11 +95,13 @@ class ContributorConnection:
         self.gpu_vram_gb = 0.0
 
 class Job:
-    def __init__(self, job_id: str, script: str, requirements: str = None, use_gpu: bool = False):
+    def __init__(self, job_id: str, script: str, requirements: str = None, use_gpu: bool = False, dataset_filename: Optional[str] = None):
         self.job_id = job_id
         self.script = script
         self.requirements = requirements
         self.use_gpu = use_gpu
+        self.dataset_filename = dataset_filename
+        self.dataset_ready = (dataset_filename is None)
         self.submitter_uid = ""
         self.submitter_email = ""
         self.done = False
@@ -532,10 +534,15 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
             }
 
     job_id = str(uuid.uuid4())
-    job = Job(job_id=job_id, script=req.script, requirements=req.requirements, use_gpu=req.use_gpu)
+    job = Job(
+        job_id=job_id,
+        script=req.script,
+        requirements=req.requirements,
+        use_gpu=req.use_gpu,
+        dataset_filename=req.dataset_filename
+    )
     job.submitter_uid = submitter_uid
     job.submitter_email = submitter_email
-    job.dataset_filename = req.dataset_filename
     job.output_extensions = req.output_extensions or [".pkl", ".pt", ".h5", ".csv", ".json", ".txt", ".png", ".jpg"]
 
     if AUTH_ENABLED and submitter_uid != "anonymous":
@@ -548,11 +555,12 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
     asyncio.create_task(db_create_job(job, submitter_uid, submitter_email))
 
     assigned = False
-    available = [
-        (cid, c) for cid, c in contributors.items()
-        if not c.busy and (not job.use_gpu or c.has_gpu)
-    ]
-    if available:
+    if job.dataset_ready:
+        available = [
+            (cid, c) for cid, c in contributors.items()
+            if not c.busy and (not job.use_gpu or c.has_gpu)
+        ]
+        if available:
         best_cid, best_conn = max(
             available,
             key=lambda x: score_contributor(x[1], job.use_gpu)
@@ -607,23 +615,31 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
     return {"job_id": job_id, "assigned": assigned}
 
 async def try_assign_pending():
+    new_pending = deque()
     while pending_jobs:
-        job_id = pending_jobs[0]
-        job = jobs[job_id]
+        job_id = pending_jobs.popleft()
+        job = jobs.get(job_id)
+        if not job or job.done:
+            continue
+        
+        if not job.dataset_ready:
+            new_pending.append(job_id)
+            continue
         
         available = [
             (cid, c) for cid, c in contributors.items()
             if not c.busy and (not job.use_gpu or c.has_gpu)
         ]
         if not available:
-            break  
+            new_pending.append(job_id)
+            continue
         
         best_cid, best_conn = max(
             available,
             key=lambda x: score_contributor(x[1], job.use_gpu)
         )
         
-        pending_jobs.popleft()
+    pending_jobs.extendleft(reversed(list(new_pending)))
         
         best_conn.busy = True
         best_conn.current_job = job_id
@@ -751,6 +767,12 @@ async def upload_dataset(request: Request, user=Depends(optional_verify_token)):
         with open(dataset_path, "wb") as f:
             f.write(base64.b64decode(data_b64))
         print(f"[coordinator] dataset saved: {dataset_path}")
+        
+        job = jobs.get(job_id)
+        if job:
+            job.dataset_ready = True
+            asyncio.create_task(try_assign_pending())
+            
         return {"saved": True, "filename": safe_filename, "path": dataset_path}
     except Exception as e:
         return {"error": str(e)}
