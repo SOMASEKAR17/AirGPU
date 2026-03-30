@@ -42,7 +42,7 @@ document.getElementById("btn-back").addEventListener("click",     () => ipcRende
 let isConnected = false;
 let currentJobId = null;
 let currentNodeId = null;
-let coordinatorUrl = "ws://hopper.proxy.rlwy.net:32592/ws/contributor";
+let coordinatorUrl = "wss://airgpu.onrender.com/ws/contributor";
 
 (async () => {
     try {

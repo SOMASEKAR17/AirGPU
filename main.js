@@ -66,15 +66,15 @@ ipcMain.handle("logout", () => {
 });
 
 const CREDITS_PAGE_URL = "PLACEHOLDER_URL";
-const coordinatorHost = process.env.COORDINATOR_HOST || 'hopper.proxy.rlwy.net';
-const coordinatorPort = process.env.COORDINATOR_PORT || '32592';
+const coordinatorHost = process.env.COORDINATOR_HOST || 'airgpu.onrender.com';
+const coordinatorPort = process.env.COORDINATOR_PORT || '';
 
 ipcMain.handle('open-credits-page', () => {
     shell.openExternal(CREDITS_PAGE_URL);
 });
 
 ipcMain.handle('get-coordinator-base', () => {
-    return `http://${coordinatorHost}:${coordinatorPort}`;
+    return `https://${coordinatorHost}${coordinatorPort ? `:${coordinatorPort}` : ''}`;
 });
 
 ipcMain.handle('update-credit-display', (event, balance) => {

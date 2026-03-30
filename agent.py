@@ -15,9 +15,9 @@ import psutil
 import websockets
 
 COORDINATOR_WS = os.environ.get(
-    "COORDINATOR_WS", "ws://hopper.proxy.rlwy.net:32592/ws/contributor"
+    "COORDINATOR_WS", "wss://airgpu.onrender.com/ws/contributor"
 )
-COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP", "http://hopper.proxy.rlwy.net:32592")
+COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP", "https://airgpu.onrender.com")
 
 NODE_ID = str(uuid.uuid4())
 
