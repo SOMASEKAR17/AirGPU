@@ -239,6 +239,7 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
 
     docker_cmd = [
         "docker", "run", "--rm",
+        "-w", "/app",
         f"--cpus={MAX_CPUS}",
         f"--memory={MAX_RAM_GB}g",
         f"--memory-swap={MAX_RAM_GB}g",
