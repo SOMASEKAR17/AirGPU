@@ -561,49 +561,49 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
             if not c.busy and (not job.use_gpu or c.has_gpu)
         ]
         if available:
-        best_cid, best_conn = max(
-            available,
-            key=lambda x: score_contributor(x[1], job.use_gpu)
-        )
-        best_conn.busy = True
-        best_conn.current_job = job_id
-        job.contributor_node_id = best_conn.node_id
-        job.status = "running"
-        job.current_contributor_start = time.time()
-        try:
-            await best_conn.ws.send_json({
-                "type": "job",
-                "job_id": job_id,
-                "script": job.script,
-                "requirements": job.requirements,
-                "use_gpu": job.use_gpu,
-                "resume_from_epoch": job.checkpoint_epoch,
-                "coordinator_url": COORDINATOR_HTTP,
-                "dataset_filename": getattr(job, "dataset_filename", None),
-                "output_extensions": getattr(job, "output_extensions", [".pkl", ".pt", ".h5", ".csv", ".json", ".txt", ".png", ".jpg"]),
-            })
-            assigned = True
+            best_cid, best_conn = max(
+                available,
+                key=lambda x: score_contributor(x[1], job.use_gpu)
+            )
+            best_conn.busy = True
+            best_conn.current_job = job_id
+            job.contributor_node_id = best_conn.node_id
+            job.status = "running"
+            job.current_contributor_start = time.time()
+            try:
+                await best_conn.ws.send_json({
+                    "type": "job",
+                    "job_id": job_id,
+                    "script": job.script,
+                    "requirements": job.requirements,
+                    "use_gpu": job.use_gpu,
+                    "resume_from_epoch": job.checkpoint_epoch,
+                    "coordinator_url": COORDINATOR_HTTP,
+                    "dataset_filename": getattr(job, "dataset_filename", None),
+                    "output_extensions": getattr(job, "output_extensions", [".pkl", ".pt", ".h5", ".csv", ".json", ".txt", ".png", ".jpg"]),
+                })
+                assigned = True
             
-            if best_conn.node_id:
-                asyncio.create_task(db_job_started(
-                    job_id,
-                    best_conn.node_id,
-                    "",
-                    best_conn.max_cpus,
-                    best_conn.max_ram_gb,
-                    best_conn.gpu_name or "",
-                ))
-            
-            sub_ws = submitter_connections.get(job_id)
-            if sub_ws:
-                try:
-                    await sub_ws.send_json({
-                        "type": "log",
-                        "job_id": job_id,
-                        "line": "[coordinator] tip: print CHECKPOINT:<epoch>:<filename> in your script to save checkpoints"
-                    })
-                except Exception:
-                    pass
+                if best_conn.node_id:
+                    asyncio.create_task(db_job_started(
+                        job_id,
+                        best_conn.node_id,
+                        "",
+                        best_conn.max_cpus,
+                        best_conn.max_ram_gb,
+                        best_conn.gpu_name or "",
+                    ))
+                
+                sub_ws = submitter_connections.get(job_id)
+                if sub_ws:
+                    try:
+                        await sub_ws.send_json({
+                            "type": "log",
+                            "job_id": job_id,
+                            "line": "[coordinator] tip: print CHECKPOINT:<epoch>:<filename> in your script to save checkpoints"
+                        })
+                    except Exception:
+                        pass
         except Exception:
             best_conn.busy = False
             best_conn.current_job = None
