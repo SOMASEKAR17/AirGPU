@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Compound — Contribute Compute</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --black:        #1A1A1A;
+      --white:        #FFFFFF;
+      --slate:        #4A4A4A;
+      --gold:         #FDF2D0;
+      --gold-dark:    #E8D9A0;
+      --green:        #4CC38A;
+      --green-bg:     #E8F9F0;
+      --lavender:     #F5F5F7;
+      --red:          #FF5F57;
+      --red-bg:       #FFF0EF;
+      --radius:       12px;
+      --radius-sm:    8px;
+      --shadow:       0 4px 24px rgba(0,0,0,0.06);
+      --font-sans:    'Inter', system-ui, -apple-system, sans-serif;
+      --font-serif:   'Playfair Display', Georgia, serif;
+      --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+    }
+
+    html, body {
+      height: 100%;
+      font-family: var(--font-sans);
+      background: var(--lavender);
+      color: var(--black);
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    
+    .titlebar {
+      -webkit-app-region: drag;
+      height: 38px;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      background: var(--white);
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      gap: 10px;
+    }
+    .titlebar-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      -webkit-app-region: no-drag;
+    }
+    .back-btn {
+      background: none;
+      border: none;
+      font-size: 0.8rem;
+      color: var(--slate);
+      cursor: pointer;
+      font-family: var(--font-sans);
+      padding: 4px 10px;
+      border-radius: var(--radius-sm);
+      transition: background 0.15s;
+    }
+    .back-btn:hover { background: var(--lavender); }
+    .titlebar-title {
+      font-family: var(--font-serif);
+      font-weight: 600;
+      font-size: 0.9rem;
+      letter-spacing: -0.01em;
+    }
+    .titlebar-spacer { flex: 1; }
+    .titlebar-btn {
+      -webkit-app-region: no-drag;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      border: none;
+      margin-left: 8px;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .titlebar-btn:hover { opacity: 0.8; }
+    .btn-close    { background: #FF5F57; }
+    .btn-minimize { background: #FFBD2E; }
+    .btn-maximize { background: #28C840; }
+
+    
+    .page {
+      padding: 62px 32px 32px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      overflow: hidden;
+    }
+
+    
+    .stats-row {
+      display: flex;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+
+    .stat-card {
+      flex: 1;
+      background: var(--white);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .stat-label {
+      font-size: 0.72rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #AEAEAE;
+    }
+
+    .stat-value {
+      font-size: 1.35rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      font-family: var(--font-mono);
+    }
+
+    .stat-value.mono-small {
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: var(--slate);
+      word-break: break-all;
+    }
+
+    .stat-sub {
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #AEAEAE;
+    }
+
+    
+    .connection-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .conn-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--red);
+      transition: background 0.3s;
+      flex-shrink: 0;
+    }
+    .conn-dot.connected { background: var(--green); }
+
+    .conn-label {
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    
+    .job-banner {
+      background: var(--gold);
+      border-radius: var(--radius);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+      display: none;
+    }
+    .job-banner.visible { display: flex; }
+    .job-banner-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .job-banner-icon {
+      font-size: 1.1rem;
+    }
+    .job-banner-text {
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+    .job-banner-id {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: #8B7730;
+    }
+
+    
+    .agent-log-panel {
+      flex: 1;
+      background: var(--white);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .log-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--lavender);
+      font-weight: 600;
+      font-size: 0.85rem;
+      flex-shrink: 0;
+    }
+
+    .log-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      line-height: 1.7;
+      color: var(--slate);
+    }
+
+    .log-line {
+      padding: 1px 0;
+      animation: fadeIn 0.15s ease;
+    }
+
+    .log-placeholder {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: #C8C8C8;
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+    }
+
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .page { animation: fadeIn 0.4s ease both; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.4; }
+    }
+    .conn-dot.connected { animation: pulse 2s ease-in-out infinite; }
+
+    
+    .log-body::-webkit-scrollbar { width: 6px; }
+    .log-body::-webkit-scrollbar-track { background: transparent; }
+    .log-body::-webkit-scrollbar-thumb { background: #D8D8D8; border-radius: 3px; }
+    .log-body::-webkit-scrollbar-thumb:hover { background: #B0B0B0; }
+
+    
+    .config-page {
+      justify-content: center;
+      align-items: center;
+    }
+    .config-card {
+      background: var(--white);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 32px;
+      width: 100%;
+      max-width: 440px;
+    }
+    .config-title {
+      font-family: var(--font-serif);
+      font-size: 1.3rem;
+      font-weight: 600;
+      margin-bottom: 24px;
+    }
+    .config-group {
+      margin-bottom: 24px;
+    }
+    .config-label-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+    .config-val {
+      font-family: var(--font-mono);
+      color: var(--slate);
+      font-size: 0.85rem;
+    }
+    .slider {
+      width: 100%;
+      -webkit-appearance: none;
+      appearance: none;
+      background: var(--lavender);
+      height: 6px;
+      border-radius: 3px;
+      outline: none;
+    }
+    .slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: var(--black);
+      cursor: pointer;
+    }
+    .config-hint {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: #AEAEAE;
+      margin-top: 8px;
+      font-family: var(--font-mono);
+    }
+    .config-note {
+      font-size: 0.8rem;
+      color: var(--slate);
+      background: var(--lavender);
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
+    .submit-btn {
+      width: 100%;
+      padding: 12px 0;
+      background: var(--black);
+      color: var(--white);
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: var(--font-sans);
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.15s;
+    }
+    .submit-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+    #dashboard-page { display: none; }
+  </style>
+</head>
+<body>
+
+  
+  <div class="titlebar">
+    <div class="titlebar-left">
+      <button class="back-btn" id="btn-back">← Back</button>
+      <span class="titlebar-title">Compound</span>
+    </div>
+    <div class="titlebar-spacer"></div>
+    <button class="titlebar-btn btn-minimize" id="btn-minimize"></button>
+    <button class="titlebar-btn btn-maximize" id="btn-maximize"></button>
+    <button class="titlebar-btn btn-close"    id="btn-close"></button>
+  </div>
+
+  <div class="page config-page" id="config-page">
+    <div class="config-card">
+      <h2 class="config-title">Configure Your Contribution</h2>
+      
+      <div class="config-group">
+        <div class="config-label-row">
+          <span>CPU Cores to share</span>
+          <span class="config-val" id="cfg-cpus-val">4 cores</span>
+        </div>
+        <input type="range" id="cpus-slider" min="1" max="8" value="4" class="slider" />
+        <div class="config-hint">min: 1 <span>max: 8</span></div>
+      </div>
+      
+      <div class="config-group">
+        <div class="config-label-row">
+          <span>RAM to share</span>
+          <span class="config-val" id="cfg-ram-val">4 GB</span>
+        </div>
+        <input type="range" id="ram-slider" min="1" max="16" value="4" class="slider" />
+        <div class="config-hint">min: 1GB <span>max: 16GB</span></div>
+      </div>
+      
+      <div class="config-group" id="gpu-group" style="display: none;">
+        <div class="config-label-row">
+          <span>GPU VRAM to share<span id="cfg-gpu-name" style="color: #AEAEAE; font-size: 0.75rem; margin-left: 8px;"></span></span>
+          <span class="config-val" id="cfg-gpu-val">4.0 GB</span>
+        </div>
+        <input type="range" id="gpu-slider" min="1024" max="10240" step="512" value="4096" class="slider" />
+        <div class="config-hint">min: 1.0GB <span id="cfg-gpu-hint">max: 10.0GB</span></div>
+      </div>
+      
+      <div class="config-note">
+        Note: These are the maximum resources any single job can use on your machine
+      </div>
+      
+      <button class="submit-btn" id="btn-start">Start Contributing</button>
+    </div>
+  </div>
+
+  <div class="page dashboard-page" id="dashboard-page">
+    
+    <div class="stats-row">
+      <div class="stat-card">
+        <span class="stat-label">Status</span>
+        <div class="connection-row">
+          <div class="conn-dot" id="conn-dot"></div>
+          <span class="conn-label" id="conn-label">Disconnected</span>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <span class="stat-label">Node ID</span>
+        <span class="stat-value mono-small" id="node-id">—</span>
+      </div>
+
+      <div class="stat-card">
+        <span class="stat-label">CPU Usage</span>
+        <span class="stat-value" id="cpu-val">—</span>
+      </div>
+
+      <div class="stat-card">
+        <span class="stat-label">RAM Free</span>
+        <span class="stat-value" id="ram-val">—</span>
+      </div>
+
+      <div class="stat-card" id="gpu-card" style="display:none;">
+        <span class="stat-label">GPU</span>
+        <span class="stat-value mono-small" id="gpu-name-display">—</span>
+        <span class="stat-sub" id="gpu-vram-display">VRAM: —</span>
+        <span class="stat-sub" id="gpu-util-display">Util: —</span>
+      </div>
+    </div>
+
+    
+    <div class="job-banner" id="job-banner">
+      <div class="job-banner-left">
+        <span class="job-banner-icon">⚡</span>
+        <span class="job-banner-text">Running Job</span>
+      </div>
+      <span class="job-banner-id" id="job-id">—</span>
+    </div>
+
+    
+    <div class="agent-log-panel">
+      <div class="log-header">Agent Log</div>
+      <div class="log-body" id="log-body">
+        <div class="log-placeholder" id="log-placeholder">Waiting for agent process to start…</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="contributor.js"></script>
+</body>
+</html>

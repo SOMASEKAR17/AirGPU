@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Compound — Submit a Job</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --black:        #1A1A1A;
+      --white:        #FFFFFF;
+      --slate:        #4A4A4A;
+      --gold:         #FDF2D0;
+      --gold-dark:    #E8D9A0;
+      --green:        #4CC38A;
+      --green-bg:     #E8F9F0;
+      --lavender:     #F5F5F7;
+      --red:          #FF5F57;
+      --red-bg:       #FFF0EF;
+      --radius:       12px;
+      --radius-sm:    8px;
+      --shadow:       0 4px 24px rgba(0,0,0,0.06);
+      --font-sans:    'Inter', system-ui, -apple-system, sans-serif;
+      --font-serif:   'Playfair Display', Georgia, serif;
+      --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+    }
+
+    html, body {
+      height: 100%;
+      font-family: var(--font-sans);
+      background: var(--lavender);
+      color: var(--black);
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    
+    .titlebar {
+      -webkit-app-region: drag;
+      height: 38px;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      background: var(--white);
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      gap: 10px;
+    }
+    .titlebar-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      -webkit-app-region: no-drag;
+    }
+    .back-btn {
+      background: none;
+      border: none;
+      font-size: 0.8rem;
+      color: var(--slate);
+      cursor: pointer;
+      font-family: var(--font-sans);
+      padding: 4px 10px;
+      border-radius: var(--radius-sm);
+      transition: background 0.15s;
+    }
+    .back-btn:hover { background: var(--lavender); }
+    .titlebar-title {
+      font-family: var(--font-serif);
+      font-weight: 600;
+      font-size: 0.9rem;
+      letter-spacing: -0.01em;
+    }
+    .titlebar-spacer { flex: 1; }
+    .titlebar-btn {
+      -webkit-app-region: no-drag;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      border: none;
+      margin-left: 8px;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .titlebar-btn:hover { opacity: 0.8; }
+    .btn-close    { background: #FF5F57; }
+    .btn-minimize { background: #FFBD2E; }
+    .btn-maximize { background: #28C840; }
+
+    
+    .page {
+      padding: 62px 32px 32px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    
+    .upload-bar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: var(--white);
+      padding: 16px 20px;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      margin-bottom: 20px;
+      flex-shrink: 0;
+    }
+
+    .file-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 18px;
+      background: var(--lavender);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 0.85rem;
+      transition: background 0.15s;
+    }
+    .file-label:hover { background: var(--gold); }
+    .file-label input { display: none; }
+
+    .file-name {
+      flex: 1;
+      color: var(--slate);
+      font-size: 0.85rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .submit-btn {
+      padding: 10px 28px;
+      background: var(--black);
+      color: var(--white);
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: var(--font-sans);
+      font-weight: 600;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.15s;
+      white-space: nowrap;
+    }
+    .submit-btn:hover {
+      opacity: 0.88;
+      transform: translateY(-1px);
+    }
+    .submit-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    
+    .log-panel {
+      flex: 1;
+      background: var(--white);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .log-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--lavender);
+      flex-shrink: 0;
+    }
+    .log-header-title {
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+    .log-job-id {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--slate);
+      background: var(--lavender);
+      padding: 3px 10px;
+      border-radius: 20px;
+    }
+
+    .log-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      line-height: 1.75;
+      color: var(--slate);
+    }
+
+    .log-line {
+      padding: 2px 0;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .log-complete {
+      color: var(--green);
+      font-weight: 600;
+      padding: 12px 0 4px;
+      font-size: 0.85rem;
+    }
+
+    .log-placeholder {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: #C8C8C8;
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+    }
+
+    
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      padding: 4px 12px;
+      border-radius: 20px;
+    }
+    .status-badge.idle     { background: var(--lavender); color: var(--slate); }
+    .status-badge.scanning { background: #EEF2FF; color: #6366F1; }
+    .status-badge.queued   { background: #FEF3C7; color: #F59E0B; }
+    .status-badge.running  { background: var(--gold); color: #8B7730; }
+    .status-badge.complete { background: var(--green-bg); color: #2A7D55; }
+    .status-badge.error    { background: var(--red-bg); color: #C0392B; }
+
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .page { animation: fadeIn 0.4s ease both; }
+
+    
+    .gpu-toggle-box {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      background: var(--white);
+      padding: 14px 20px;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      margin-bottom: 20px;
+      cursor: pointer;
+      user-select: none;
+      flex-shrink: 0;
+      transition: box-shadow 0.15s;
+    }
+    .gpu-toggle-box:hover { box-shadow: 0 6px 30px rgba(0,0,0,0.08); }
+    .gpu-toggle-checkbox {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--black);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .gpu-toggle-text {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .gpu-toggle-label { font-weight: 600; font-size: 0.85rem; }
+    .gpu-toggle-subtext { font-size: 0.75rem; color: #777; }
+
+    
+    .log-body::-webkit-scrollbar { width: 6px; }
+    .log-body::-webkit-scrollbar-track { background: transparent; }
+    .log-body::-webkit-scrollbar-thumb {
+      background: #D8D8D8;
+      border-radius: 3px;
+    }
+    .log-body::-webkit-scrollbar-thumb:hover { background: #B0B0B0; }
+  </style>
+</head>
+<body>
+
+  
+  <div class="titlebar">
+    <div class="titlebar-left">
+      <button class="back-btn" id="btn-back">← Back</button>
+      <span class="titlebar-title">Compound</span>
+    </div>
+    <div class="titlebar-spacer"></div>
+    <button class="titlebar-btn btn-minimize" id="btn-minimize"></button>
+    <button class="titlebar-btn btn-maximize" id="btn-maximize"></button>
+    <button class="titlebar-btn btn-close"    id="btn-close"></button>
+  </div>
+
+  <div class="page">
+    
+    <div class="upload-bar">
+      <label class="file-label" id="file-picker-label">
+        📁 Choose .py file
+        <input type="file" id="file-input" accept=".py" />
+      </label>
+      <span class="file-name" id="file-name">No file selected</span>
+
+      <label class="file-label" id="req-picker-label">
+        📋 requirements.txt (optional)
+        <input type="file" id="req-input" accept=".txt" />
+      </label>
+      <span class="file-name" id="req-name">No requirements</span>
+
+      <button class="submit-btn" id="btn-submit" disabled>Submit Job</button>
+    </div>
+
+    
+    <label class="gpu-toggle-box">
+      <input type="checkbox" class="gpu-toggle-checkbox" id="use-gpu-checkbox" />
+      <div class="gpu-toggle-text">
+        <span class="gpu-toggle-label">Request GPU acceleration</span>
+        <span class="gpu-toggle-subtext">Only routes to contributors with an available NVIDIA GPU</span>
+      </div>
+    </label>
+
+    
+    <div class="log-panel">
+      <div class="log-header">
+        <span class="log-header-title">Output</span>
+        <span id="status-badge" class="status-badge idle">
+          <span class="status-dot"></span>
+          <span id="status-text">Idle</span>
+        </span>
+      </div>
+      <div class="log-body" id="log-body">
+        <div class="log-placeholder" id="log-placeholder">Logs will appear here after you submit a job</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="submitter.js"></script>
+</body>
+</html>

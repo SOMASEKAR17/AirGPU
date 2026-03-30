@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Compound Compute</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --black:        #1A1A1A;
+      --white:        #FFFFFF;
+      --slate:        #4A4A4A;
+      --gold:         #FDF2D0;
+      --gold-dark:    #E8D9A0;
+      --green:        #4CC38A;
+      --lavender:     #F5F5F7;
+      --radius:       12px;
+      --shadow:       0 4px 24px rgba(0,0,0,0.06);
+      --shadow-hover: 0 8px 40px rgba(0,0,0,0.10);
+      --font-sans:    'Inter', system-ui, -apple-system, sans-serif;
+      --font-serif:   'Playfair Display', Georgia, serif;
+    }
+
+    html, body {
+      height: 100%;
+      font-family: var(--font-sans);
+      background: var(--white);
+      color: var(--black);
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    
+    .titlebar {
+      -webkit-app-region: drag;
+      height: 38px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 0 8px;
+      background: var(--white);
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+    }
+    .titlebar-btn {
+      -webkit-app-region: no-drag;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      border: none;
+      margin-left: 8px;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .titlebar-btn:hover { opacity: 0.8; }
+    .btn-close    { background: #FF5F57; }
+    .btn-minimize { background: #FFBD2E; }
+    .btn-maximize { background: #28C840; }
+
+    
+    .page {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      padding-top: 38px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    
+    .ribbon {
+      position: absolute;
+      width: 700px;
+      height: 700px;
+      border-radius: 50%;
+      filter: blur(120px);
+      opacity: 0.35;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .ribbon-1 {
+      background: var(--gold);
+      top: -220px;
+      right: -200px;
+    }
+    .ribbon-2 {
+      background: linear-gradient(135deg, var(--lavender), #e8e4f0);
+      bottom: -260px;
+      left: -240px;
+    }
+
+    
+    .content {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      max-width: 680px;
+      padding: 0 32px;
+    }
+
+    .logo {
+      font-family: var(--font-serif);
+      font-weight: 700;
+      font-size: 2rem;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+    }
+
+    .tagline {
+      color: var(--slate);
+      font-weight: 400;
+      font-size: 1rem;
+      line-height: 1.6;
+      margin-bottom: 56px;
+    }
+
+    
+    .roles {
+      display: flex;
+      gap: 28px;
+      justify-content: center;
+    }
+
+    .role-card {
+      width: 260px;
+      padding: 40px 28px 36px;
+      background: var(--white);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      transition: transform 0.25s cubic-bezier(.4,0,.2,1),
+                  box-shadow 0.25s cubic-bezier(.4,0,.2,1);
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .role-card::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 4px;
+      background: var(--black);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.3s ease;
+    }
+    .role-card:hover {
+      transform: translateY(-6px);
+      box-shadow: var(--shadow-hover);
+    }
+    .role-card:hover::before {
+      transform: scaleX(1);
+    }
+
+    .role-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: 14px;
+      background: var(--lavender);
+      margin: 0 auto 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+    }
+
+    .role-title {
+      font-weight: 600;
+      font-size: 1.1rem;
+      margin-bottom: 8px;
+    }
+
+    .role-desc {
+      color: var(--slate);
+      font-size: 0.85rem;
+      line-height: 1.55;
+    }
+
+    
+    .footer-note {
+      position: absolute;
+      bottom: 28px;
+      color: #AEAEAE;
+      font-size: 0.75rem;
+      letter-spacing: 0.03em;
+    }
+
+    
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(18px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .content  { animation: fadeUp 0.6s ease both; }
+    .roles    { animation: fadeUp 0.7s ease 0.15s both; }
+  </style>
+</head>
+<body>
+
+  <!-- Title bar -->
+  <div class="titlebar">
+    <button class="titlebar-btn btn-minimize" id="btn-minimize"></button>
+    <button class="titlebar-btn btn-maximize" id="btn-maximize"></button>
+    <button class="titlebar-btn btn-close"    id="btn-close"></button>
+  </div>
+
+  <div class="page">
+    
+    <div class="ribbon ribbon-1"></div>
+    <div class="ribbon ribbon-2"></div>
+
+    <div class="content">
+      <div class="logo">Compound</div>
+      <p class="tagline">Distributed compute, simplified.<br/>Select how you'd like to participate.</p>
+
+      <div class="roles">
+        <div class="role-card" id="role-submit">
+          <div class="role-icon">📤</div>
+          <div class="role-title">Submit a Job</div>
+          <div class="role-desc">Upload a Python script and watch it execute on a remote machine in real time.</div>
+        </div>
+
+        <div class="role-card" id="role-contribute">
+          <div class="role-icon">⚡</div>
+          <div class="role-title">Contribute Compute</div>
+          <div class="role-desc">Lend your machine's resources. Jobs run sandboxed inside Docker containers.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-note">No account required · Everything runs in memory</div>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require("electron");
+
+    // Window controls
+    document.getElementById("btn-minimize").addEventListener("click", () => ipcRenderer.send("window-minimize"));
+    document.getElementById("btn-maximize").addEventListener("click", () => ipcRenderer.send("window-maximize"));
+    document.getElementById("btn-close").addEventListener("click",    () => ipcRenderer.send("window-close"));
+
+    // Role selection
+    document.getElementById("role-submit").addEventListener("click", () => {
+      ipcRenderer.send("navigate", "submitter.html");
+    });
+
+    document.getElementById("role-contribute").addEventListener("click", () => {
+      ipcRenderer.send("navigate", "contributor.html");
+    });
+  </script>
+</body>
+</html>
