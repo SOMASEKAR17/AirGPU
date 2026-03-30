@@ -66,17 +66,15 @@ ipcMain.handle("logout", () => {
 });
 
 const CREDITS_PAGE_URL = "PLACEHOLDER_URL";
-const IS_PROD = (process.env.IS_PROD === 'true');
-const coordinatorHost = IS_PROD ? 'airgpu.onrender.com' : 'localhost';
-const coordinatorPort = IS_PROD ? '' : '8000';
-const protocol = IS_PROD ? 'https' : 'http';
+const coordinatorHost = process.env.COORDINATOR_HOST || 'airgpu.onrender.com';
+const coordinatorPort = process.env.COORDINATOR_PORT || '';
 
 ipcMain.handle('open-credits-page', () => {
     shell.openExternal(CREDITS_PAGE_URL);
 });
 
 ipcMain.handle('get-coordinator-base', () => {
-    return `${protocol}://${coordinatorHost}${coordinatorPort ? `:${coordinatorPort}` : ''}`;
+    return `https://${coordinatorHost}${coordinatorPort ? `:${coordinatorPort}` : ''}`;
 });
 
 ipcMain.handle('update-credit-display', (event, balance) => {
