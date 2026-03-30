@@ -9,3 +9,4 @@ psutil==5.9.8
 
 
 typing-extensions>=4.8.0
+firebase_admin

@@ -3,14 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Compound Compute</title>
+  <title>Compound Compute - Login</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet" />
   <style>
-    
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-
     :root {
       --black:        #1A1A1A;
       --white:        #FFFFFF;
@@ -21,11 +19,9 @@
       --lavender:     #F5F5F7;
       --radius:       12px;
       --shadow:       0 4px 24px rgba(0,0,0,0.06);
-      --shadow-hover: 0 8px 40px rgba(0,0,0,0.10);
       --font-sans:    'Inter', system-ui, -apple-system, sans-serif;
       --font-serif:   'Playfair Display', Georgia, serif;
     }
-
     html, body {
       height: 100%;
       font-family: var(--font-sans);
@@ -34,40 +30,18 @@
       overflow: hidden;
       -webkit-font-smoothing: antialiased;
     }
-
-    
     .titlebar {
       -webkit-app-region: drag;
       height: 38px;
       display: flex;
       align-items: center;
+      justify-content: flex-end;
       padding: 0 8px;
       background: var(--white);
       position: fixed;
       top: 0; left: 0; right: 0;
       z-index: 100;
     }
-    #user-bar {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      -webkit-app-region: no-drag;
-      font-size: 0.85rem;
-      color: var(--slate);
-    }
-    #logout-btn {
-      background: none;
-      border: none;
-      font-size: 0.8rem;
-      color: var(--slate);
-      cursor: pointer;
-      font-family: var(--font-sans);
-      padding: 4px 10px;
-      border-radius: var(--radius-sm);
-      transition: background 0.15s;
-    }
-    #logout-btn:hover { background: var(--lavender); }
-    .titlebar-spacer { flex: 1; }
     .titlebar-btn {
       -webkit-app-region: no-drag;
       width: 14px; height: 14px;
@@ -81,8 +55,6 @@
     .btn-close    { background: #FF5F57; }
     .btn-minimize { background: #FFBD2E; }
     .btn-maximize { background: #28C840; }
-
-    
     .page {
       display: flex;
       flex-direction: column;
@@ -93,8 +65,6 @@
       position: relative;
       overflow: hidden;
     }
-
-    
     .ribbon {
       position: absolute;
       width: 700px;
@@ -115,8 +85,6 @@
       bottom: -260px;
       left: -240px;
     }
-
-    
     .content {
       position: relative;
       z-index: 1;
@@ -124,7 +92,6 @@
       max-width: 680px;
       padding: 0 32px;
     }
-
     .logo {
       font-family: var(--font-serif);
       font-weight: 700;
@@ -132,7 +99,6 @@
       letter-spacing: -0.02em;
       margin-bottom: 8px;
     }
-
     .tagline {
       color: var(--slate);
       font-weight: 400;
@@ -140,127 +106,84 @@
       line-height: 1.6;
       margin-bottom: 56px;
     }
-
-    
-    .roles {
-      display: flex;
-      gap: 28px;
-      justify-content: center;
-    }
-
-    .role-card {
-      width: 260px;
+    .login-card {
+      width: 320px;
       padding: 40px 28px 36px;
       background: var(--white);
       border-radius: var(--radius);
       box-shadow: var(--shadow);
-      cursor: pointer;
-      transition: transform 0.25s cubic-bezier(.4,0,.2,1),
-                  box-shadow 0.25s cubic-bezier(.4,0,.2,1);
       text-align: center;
+      margin: 0 auto;
       position: relative;
-      overflow: hidden;
     }
-    .role-card::before {
-      content: "";
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 4px;
-      background: var(--black);
-      transform: scaleX(0);
-      transform-origin: left;
-      transition: transform 0.3s ease;
-    }
-    .role-card:hover {
-      transform: translateY(-6px);
-      box-shadow: var(--shadow-hover);
-    }
-    .role-card:hover::before {
-      transform: scaleX(1);
-    }
-
-    .role-icon {
-      width: 56px;
-      height: 56px;
-      border-radius: 14px;
-      background: var(--lavender);
-      margin: 0 auto 20px;
+    .login-btn {
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 1.5rem;
+      gap: 12px;
+      width: 100%;
+      padding: 12px 16px;
+      background: var(--white);
+      border: 1px solid #E2E8F0;
+      border-radius: 8px;
+      font-family: var(--font-sans);
+      font-weight: 500;
+      font-size: 0.95rem;
+      color: var(--black);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
     }
-
-    .role-title {
-      font-weight: 600;
-      font-size: 1.1rem;
-      margin-bottom: 8px;
+    .login-btn:hover {
+      background: #F8FAFC;
+      border-color: #CBD5E1;
     }
-
-    .role-desc {
+    .login-btn:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+    .login-btn svg { width: 18px; height: 18px; }
+    .muted-text {
       color: var(--slate);
-      font-size: 0.85rem;
-      line-height: 1.55;
-    }
-
-    
-    .footer-note {
-      position: absolute;
-      bottom: 28px;
-      color: #AEAEAE;
       font-size: 0.75rem;
-      letter-spacing: 0.03em;
+      margin-top: 20px;
+      line-height: 1.5;
     }
-
-    
+    .error-text {
+      color: var(--red);
+      font-size: 0.85rem;
+      margin-top: 12px;
+      display: none;
+    }
     @keyframes fadeUp {
       from { opacity: 0; transform: translateY(18px); }
       to   { opacity: 1; transform: translateY(0); }
     }
-    .content  { animation: fadeUp 0.6s ease both; }
-    .roles    { animation: fadeUp 0.7s ease 0.15s both; }
+    .content { animation: fadeUp 0.6s ease both; }
   </style>
 </head>
 <body>
-
-  <!-- Title bar -->
   <div class="titlebar">
-    <div id="user-bar">
-      <img id="user-avatar" style="display:none; width:28px; height:28px; border-radius:50%;" />
-      <span id="user-name"></span>
-      <button id="logout-btn" onclick="window.electronAPI.logout()">Sign out</button>
-    </div>
-    <div class="titlebar-spacer"></div>
     <button class="titlebar-btn btn-minimize" id="btn-minimize"></button>
     <button class="titlebar-btn btn-maximize" id="btn-maximize"></button>
     <button class="titlebar-btn btn-close"    id="btn-close"></button>
   </div>
 
   <div class="page">
-    
     <div class="ribbon ribbon-1"></div>
     <div class="ribbon ribbon-2"></div>
-
     <div class="content">
       <div class="logo">Compound</div>
-      <p class="tagline">Distributed compute, simplified.<br/>Select how you'd like to participate.</p>
-
-      <div class="roles">
-        <div class="role-card" id="role-submit">
-          <div class="role-icon">📤</div>
-          <div class="role-title">Submit a Job</div>
-          <div class="role-desc">Upload a Python script and watch it execute on a remote machine in real time.</div>
-        </div>
-
-        <div class="role-card" id="role-contribute">
-          <div class="role-icon">⚡</div>
-          <div class="role-title">Contribute Compute</div>
-          <div class="role-desc">Lend your machine's resources. Jobs run sandboxed inside Docker containers.</div>
-        </div>
+      <p class="tagline">Distributed compute, simplified.</p>
+      
+      <div class="login-card">
+        <button id="login-google" class="login-btn">
+          <svg viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          Continue with Google
+        </button>
+        <div id="error-msg" class="error-text">Sign in failed — please try again</div>
+        <p class="muted-text">Your identity is verified before contributing or submitting jobs</p>
       </div>
     </div>
-
-    <div class="footer-note">No account required · Everything runs in memory</div>
   </div>
 
   <script>
@@ -275,30 +198,68 @@
       startAgent: (cfg) => ipcRenderer.send('start-agent', cfg)
     };
 
-    // Window controls
     document.getElementById("btn-minimize").addEventListener("click", () => ipcRenderer.send("window-minimize"));
     document.getElementById("btn-maximize").addEventListener("click", () => ipcRenderer.send("window-maximize"));
     document.getElementById("btn-close").addEventListener("click",    () => ipcRenderer.send("window-close"));
+  </script>
 
-    // Role selection
-    document.getElementById("role-submit").addEventListener("click", () => {
-      ipcRenderer.send("navigate", "submitter.html");
-    });
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+    import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
 
-    document.getElementById("role-contribute").addEventListener("click", () => {
-      ipcRenderer.send("navigate", "contributor.html");
-    });
+    const firebaseConfig = {
+      apiKey: "AIzaSyCI_KpsrIMHGdmeZ_SRBYtpE6JLzE4yTPg",
+      authDomain: "airgpu-928f3.firebaseapp.com",
+      projectId: "airgpu-928f3",
+      storageBucket: "airgpu-928f3.firebasestorage.app",
+      messagingSenderId: "450670816358",
+      appId: "1:450670816358:web:6d4679efa0a458a680d1a7",
+      measurementId: "G-2SWH0KWZ4R"
+    };
 
-    (async () => {
-      const user = await window.electronAPI.getUser();
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const provider = new GoogleAuthProvider();
+
+    const btn = document.getElementById("login-google");
+    const errorMsg = document.getElementById("error-msg");
+
+    onAuthStateChanged(auth, async (user) => {
       if (user) {
-        document.getElementById("user-name").textContent = user.displayName || user.email;
-        if (user.photoURL) {
-            document.getElementById("user-avatar").src = user.photoURL;
-            document.getElementById("user-avatar").style.display = "block";
-        }
+        const idToken = await user.getIdToken();
+        await window.electronAPI.setAuthToken(idToken);
+        await window.electronAPI.setUser({
+          displayName: user.displayName,
+          email: user.email,
+          photoURL: user.photoURL
+        });
+        
+        setInterval(async () => {
+            try {
+                const token = await user.getIdToken(true);
+                window.electronAPI.setAuthToken(token);
+            } catch (e) {}
+        }, 55 * 60 * 1000);
+
+        window.electronAPI.navigate('index.html');
       }
-    })();
+    });
+
+    btn.addEventListener("click", async () => {
+      errorMsg.style.display = "none";
+      const originalText = btn.innerHTML;
+      btn.innerHTML = "Signing in...";
+      btn.disabled = true;
+
+      try {
+        await signInWithPopup(auth, provider);
+      } catch (err) {
+        console.error(err);
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+        errorMsg.style.display = "block";
+      }
+    });
   </script>
 </body>
 </html>

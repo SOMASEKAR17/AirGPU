@@ -6,11 +6,38 @@ from typing import Dict, Optional
 from collections import deque
 import time
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
+import firebase_admin
+from firebase_admin import credentials, auth as firebase_auth
+
 from scanner import scan_code, format_scan_result
+
+SERVICE_ACCOUNT_PATH = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "serviceAccount.json")
+
+if os.path.exists(SERVICE_ACCOUNT_PATH):
+    cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
+    firebase_admin.initialize_app(cred)
+    AUTH_ENABLED = True
+    print("[coordinator] Firebase auth enabled")
+else:
+    firebase_admin.initialize_app()
+    AUTH_ENABLED = False
+    print("[coordinator] Firebase auth disabled — serviceAccount.json not found")
+
+async def optional_verify_token(credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer(auto_error=False))):
+    if not AUTH_ENABLED:
+        return {"uid": "anonymous", "email": "anonymous"}
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Authorization required")
+    try:
+        decoded = firebase_auth.verify_id_token(credentials.credentials)
+        return decoded
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), "checkpoints")
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
@@ -74,7 +101,8 @@ class SubmitJobRequest(BaseModel):
     use_gpu: bool = False
 
 @app.post("/submit-job")
-async def submit_job(req: SubmitJobRequest):
+async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token)):
+    print(f"[coordinator] job submitted by {user.get('email', 'unknown')}")
     try:
         scan_result = scan_code(req.script)
         if not scan_result.passed:
@@ -259,6 +287,14 @@ async def get_checkpoint(job_id: str):
 @app.websocket("/ws/contributor")
 async def ws_contributor(ws: WebSocket):
     await ws.accept()
+    token = ws.query_params.get("token")
+    if AUTH_ENABLED and token:
+        try:
+            firebase_auth.verify_id_token(token)
+        except Exception:
+            await ws.close(code=1008)
+            return
+            
     cid = id(ws)
     conn = ContributorConnection(ws=ws)
     contributors[cid] = conn
@@ -366,6 +402,14 @@ def get_queue_position(job_id: str) -> int:
 @app.websocket("/ws/submitter/{job_id}")
 async def ws_submitter(ws: WebSocket, job_id: str):
     await ws.accept()
+    token = ws.query_params.get("token")
+    if AUTH_ENABLED and token:
+        try:
+            firebase_auth.verify_id_token(token)
+        except Exception:
+            await ws.close(code=1008)
+            return
+            
     submitter_connections[job_id] = ws
     print(f"[coordinator] submitter connected for job {job_id}")
 

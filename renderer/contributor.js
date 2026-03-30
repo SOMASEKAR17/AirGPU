@@ -1,5 +1,14 @@
-
 const { ipcRenderer } = require("electron");
+
+window.electronAPI = window.electronAPI || {
+  setAuthToken: (token) => ipcRenderer.invoke('set-auth-token', token),
+  getAuthToken: () => ipcRenderer.invoke('get-auth-token'),
+  setUser: (user) => ipcRenderer.invoke('set-user', user),
+  getUser: () => ipcRenderer.invoke('get-user'),
+  logout: () => ipcRenderer.invoke('logout'),
+  navigate: (page) => ipcRenderer.send('navigate', page),
+  startAgent: (cfg) => ipcRenderer.send('start-agent', cfg)
+};
 
 
 
@@ -218,14 +227,16 @@ async function setupConfig() {
       });
     }
 
-    document.getElementById("btn-start").addEventListener("click", () => {
+    document.getElementById("btn-start").addEventListener("click", async () => {
       document.getElementById("config-page").style.display = "none";
       document.getElementById("dashboard-page").style.display = "flex";
       
+      const token = await window.electronAPI.getAuthToken();
       ipcRenderer.send("start-agent", {
         maxCpus: cpusSlider.value,
         maxRamGb: ramSlider.value,
-        maxGpuVramMb: hasGpu ? gpuSlider.value : 0
+        maxGpuVramMb: hasGpu ? gpuSlider.value : 0,
+        authToken: token || ""
       });
     });
   }

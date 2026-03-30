@@ -25,6 +25,8 @@ function findPython() {
 
 let mainWindow = null;
 let agentProcess = null;
+let currentAuthToken = null;
+let currentUser = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -41,10 +43,8 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow.loadFile(path.join(__dirname, "renderer", "login.html"));
 }
-
-
 
 ipcMain.on("navigate", (_event, page) => {
   mainWindow.loadFile(path.join(__dirname, "renderer", page));
@@ -55,13 +55,29 @@ ipcMain.on("go-home", () => {
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 });
 
-
-
 ipcMain.on("window-minimize", () => mainWindow.minimize());
 ipcMain.on("window-maximize", () => {
   mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
 });
 ipcMain.on("window-close", () => mainWindow.close());
+
+ipcMain.handle('set-auth-token', (event, token) => {
+    currentAuthToken = token;
+});
+ipcMain.handle('get-auth-token', () => {
+    return currentAuthToken;
+});
+ipcMain.handle('set-user', (event, user) => {
+    currentUser = user;
+});
+ipcMain.handle('get-user', () => {
+    return currentUser;
+});
+ipcMain.handle('logout', () => {
+    currentAuthToken = null;
+    currentUser = null;
+    mainWindow.loadFile(path.join(__dirname, 'renderer', 'login.html'));
+});
 
 
 
@@ -109,7 +125,7 @@ ipcMain.handle("check-gpu", async () => {
 
 
 
-ipcMain.on("start-agent", (event, { maxCpus = 2, maxRamGb = 4, maxGpuVramMb = 0 } = {}) => {
+ipcMain.on("start-agent", (event, { maxCpus = 2, maxRamGb = 4, maxGpuVramMb = 0, authToken = "" } = {}) => {
   if (agentProcess) return;
 
   const pythonExe = findPython();
@@ -121,7 +137,8 @@ ipcMain.on("start-agent", (event, { maxCpus = 2, maxRamGb = 4, maxGpuVramMb = 0 
       ...process.env,
       CONTRIB_MAX_CPUS: maxCpus.toString(),
       CONTRIB_MAX_RAM_GB: maxRamGb.toString(),
-      CONTRIB_MAX_GPU_VRAM_MB: maxGpuVramMb.toString()
+      CONTRIB_MAX_GPU_VRAM_MB: maxGpuVramMb.toString(),
+      CONTRIB_AUTH_TOKEN: authToken
     }
   });
 

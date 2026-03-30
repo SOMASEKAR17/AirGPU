@@ -1,6 +1,15 @@
-
 const { ipcRenderer } = require("electron");
 const fs = require("fs");
+
+window.electronAPI = window.electronAPI || {
+  setAuthToken: (token) => ipcRenderer.invoke('set-auth-token', token),
+  getAuthToken: () => ipcRenderer.invoke('get-auth-token'),
+  setUser: (user) => ipcRenderer.invoke('set-user', user),
+  getUser: () => ipcRenderer.invoke('get-user'),
+  logout: () => ipcRenderer.invoke('logout'),
+  navigate: (page) => ipcRenderer.send('navigate', page),
+  startAgent: (cfg) => ipcRenderer.send('start-agent', cfg)
+};
 
 
 
@@ -80,9 +89,14 @@ btnSubmit.addEventListener("click", async () => {
   appendLogLine("⟳ Scanning code for security violations...");
 
   try {
+    const token = await window.electronAPI.getAuthToken();
+
     const res = await fetch(`${COORDINATOR_HTTP}/submit-job`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { "Authorization": `Bearer ${token}` } : {})
+      },
       body: JSON.stringify({ 
         script: selectedFileContents,
         requirements: selectedReqContents,
@@ -140,8 +154,10 @@ btnSubmit.addEventListener("click", async () => {
 
 
 
-function connectSubmitterWS(jobId) {
-  const ws = new WebSocket(`${COORDINATOR_WS}/ws/submitter/${jobId}`);
+async function connectSubmitterWS(jobId) {
+  const token = await window.electronAPI.getAuthToken();
+  const wsUrl = `${COORDINATOR_WS}/ws/submitter/${jobId}${token ? `?token=${token}` : ''}`;
+  const ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
     appendLogLine(`⬤ Connected — streaming logs for job ${jobId.slice(0, 8)}…`);

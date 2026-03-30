@@ -14,6 +14,7 @@ __pycache__/
 
 checkpoints/
 
+serviceAccount.json
 
 .env
 .env.local

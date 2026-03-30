@@ -292,9 +292,14 @@ async def main():
     print(f"[agent] node_id = {NODE_ID}")
     print(f"[agent] connecting to {COORDINATOR_WS}")
 
+    AUTH_TOKEN = os.environ.get("CONTRIB_AUTH_TOKEN", "")
+    ws_url = COORDINATOR_WS
+    if AUTH_TOKEN:
+        ws_url = f"{COORDINATOR_WS}?token={AUTH_TOKEN}"
+    
     while True:
         try:
-            async with websockets.connect(COORDINATOR_WS) as ws:
+            async with websockets.connect(ws_url) as ws:
                 print("[agent] connected to coordinator")
 
                 heartbeat_task = asyncio.create_task(send_heartbeats(ws))
