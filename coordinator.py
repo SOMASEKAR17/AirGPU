@@ -61,17 +61,19 @@ class ContributorConnection:
         self.ws = ws
         self.node_id = node_id
         self.busy = False
-        self.current_job: Optional[str] = None
-        self.cpu_free: float = 0.0
-        self.ram_free: float = 0.0
-        self.has_gpu: bool = False
-        self.gpu_name: str = None
-        self.gpu_vram_free_mb: int = 0
-        self.gpu_vram_total_mb: int = 0
-        self.gpu_utilization: int = 0
-        self.max_gpu_vram_mb: int = 0
-        self.max_cpus: float = 2.0
-        self.max_ram_gb: int = 4
+        self.current_job = None
+        self.cpu_free = 0.0
+        self.ram_free = 0.0
+        self.has_gpu = False
+        self.gpu_name = None
+        self.gpu_vram_free_mb = 0
+        self.gpu_vram_total_mb = 0
+        self.gpu_utilization = 0
+        self.max_gpu_vram_mb = 0
+        self.max_cpus = 2.0
+        self.max_ram_gb = 4
+        self.uid = "anonymous"
+        self.gpu_vram_gb = 0.0
 
 class Job:
     def __init__(self, job_id: str, script: str, requirements: str = None, use_gpu: bool = False):
@@ -79,21 +81,41 @@ class Job:
         self.script = script
         self.requirements = requirements
         self.use_gpu = use_gpu
-        self.submitter_uid: str = ""
-        self.submitter_email: str = ""
+        self.submitter_uid = ""
+        self.submitter_email = ""
         self.done = False
         self.status = "pending"
-        self.contributor_node_id: Optional[str] = None
+        self.contributor_node_id = None
         self.submitted_at = time.time()
         self.checkpoint_epoch = 0
         self.checkpoint_path = None
         self.retry_count = 0
         self.max_retries = 3
+        self.estimated_cost = 1.0
+        self.contributions = []
+        self.current_contributor_start = None
 
 contributors: Dict[int, ContributorConnection] = {}
 jobs: Dict[str, Job] = {}
 submitter_connections: Dict[str, WebSocket] = {}
 pending_jobs: deque = deque()
+
+async def db_initialize_user_credits(uid: str):
+    def _write():
+        ref = firebase_db.reference(f"/credits/{uid}")
+        existing = ref.get()
+        if not existing:
+            ref.set({
+                "uid": uid,
+                "balance": 100.0,
+                "total_earned": 0.0,
+                "total_spent": 0.0,
+                "initialized_at": time.time()
+            })
+    try:
+        await asyncio.to_thread(_write)
+    except Exception as e:
+        print(f"[db] initialize_credits failed: {e}")
 
 async def db_upsert_user(uid: str, email: str, display_name: str):
     def _write():
@@ -105,6 +127,7 @@ async def db_upsert_user(uid: str, email: str, display_name: str):
                 "email": email,
                 "displayName": display_name,
             })
+            return False
         else:
             ref.set({
                 "uid": uid,
@@ -115,8 +138,11 @@ async def db_upsert_user(uid: str, email: str, display_name: str):
                 "total_jobs_submitted": 0,
                 "total_jobs_contributed": 0,
             })
+            return True
     try:
-        await asyncio.to_thread(_write)
+        is_new = await asyncio.to_thread(_write)
+        if is_new:
+            await db_initialize_user_credits(uid)
     except Exception as e:
         print(f"[db] upsert_user failed: {e}")
 
@@ -168,9 +194,16 @@ async def db_job_started(job_id: str, contributor_node_id: str, contributor_uid:
     except Exception as e:
         print(f"[db] job_started failed: {e}")
 
-async def db_job_completed(job_id: str, node_id: str, contributor_uid: str, duration: float, cpu_cores: float, ram_gb: int, use_gpu: bool, gpu_name: str):
-    cpu_time = round(cpu_cores * duration, 1)
-    gpu_time = round(duration, 1) if use_gpu else 0
+def calculate_job_cost(duration_seconds: float, cpu_cores: float, ram_gb: int, use_gpu: bool, gpu_vram_gb: float) -> float:
+    cpu_cost = cpu_cores * duration_seconds * 0.01
+    ram_cost = ram_gb * duration_seconds * 0.005
+    gpu_cost = gpu_vram_gb * duration_seconds * 0.05 if use_gpu else 0
+    total = round(cpu_cost + ram_cost + gpu_cost, 2)
+    return max(total, 1.0)
+
+async def db_job_completed(job_id: str, node_id: str, contributor_uid: str, duration: float, cpu_cores: float, ram_gb: int, use_gpu: bool, gpu_name: str, gpu_vram_gb: float, submitter_uid: str, estimated_cost: float):
+    actual_cost = calculate_job_cost(duration, cpu_cores, ram_gb, use_gpu, gpu_vram_gb)
+    contributor_earn = round(actual_cost * 0.8, 2)
 
     def _write():
         firebase_db.reference(f"/jobs/{job_id}").update({
@@ -178,8 +211,10 @@ async def db_job_completed(job_id: str, node_id: str, contributor_uid: str, dura
             "contributor_node_id": node_id,
             "completed_at": time.time(),
             "duration_seconds": duration,
-            "cpu_time_seconds": cpu_time,
-            "gpu_time_seconds": gpu_time,
+            "cpu_time_seconds": round(cpu_cores * duration, 1),
+            "gpu_time_seconds": round(duration, 1) if use_gpu else 0,
+            "actual_cost_credits": actual_cost,
+            "contributor_earned_credits": contributor_earn,
         })
 
         contrib_ref = firebase_db.reference(f"/contributors/{node_id}")
@@ -187,18 +222,34 @@ async def db_job_completed(job_id: str, node_id: str, contributor_uid: str, dura
         if existing:
             contrib_ref.update({
                 "total_jobs_executed": (existing.get("total_jobs_executed") or 0) + 1,
-                "total_cpu_time_seconds": round((existing.get("total_cpu_time_seconds") or 0) + cpu_time, 1),
-                "total_gpu_time_seconds": round((existing.get("total_gpu_time_seconds") or 0) + gpu_time, 1),
+                "total_cpu_time_seconds": round((existing.get("total_cpu_time_seconds") or 0) + cpu_cores * duration, 1),
+                "total_gpu_time_seconds": round((existing.get("total_gpu_time_seconds") or 0) + (duration if use_gpu else 0), 1),
+                "total_credits_earned": round((existing.get("total_credits_earned") or 0) + contributor_earn, 2),
                 "last_seen": time.time(),
             })
 
-        if contributor_uid:
+        if contributor_uid and contributor_uid != "anonymous":
             firebase_db.reference(f"/users/{contributor_uid}/total_jobs_contributed").transaction(
                 lambda current: (current or 0) + 1
             )
 
+        if submitter_uid and submitter_uid != "anonymous":
+            firebase_db.reference(f"/users/{submitter_uid}/total_jobs_submitted").transaction(
+                lambda current: (current or 0) + 0
+            )
+
     try:
         await asyncio.to_thread(_write)
+
+        if AUTH_ENABLED:
+            if submitter_uid and submitter_uid != "anonymous":
+                if estimated_cost > actual_cost:
+                    refund = round(estimated_cost - actual_cost, 2)
+                    await db_refund_credits(submitter_uid, refund, job_id)
+
+            if contributor_uid and contributor_uid != "anonymous":
+                await db_earn_credits(contributor_uid, contributor_earn, job_id)
+
     except Exception as e:
         print(f"[db] job_completed failed: {e}")
 
@@ -231,8 +282,175 @@ async def db_upsert_contributor(node_id: str, uid: str, email: str, max_cpus: fl
             })
     try:
         await asyncio.to_thread(_write)
+        if uid and uid != "anonymous":
+            await db_initialize_user_credits(uid)
     except Exception as e:
         print(f"[db] upsert_contributor failed: {e}")
+
+async def db_get_credit_balance(uid: str) -> float:
+    def _read():
+        ref = firebase_db.reference(f"/credits/{uid}/balance")
+        val = ref.get()
+        return float(val) if val is not None else 100.0
+    try:
+        return await asyncio.to_thread(_read)
+    except Exception:
+        return 100.0
+
+async def db_deduct_credits(uid: str, amount: float, job_id: str) -> bool:
+    def _write():
+        ref = firebase_db.reference(f"/credits/{uid}")
+        data = ref.get()
+        if not data:
+            ref.set({
+                "uid": uid,
+                "balance": 100.0,
+                "total_earned": 0.0,
+                "total_spent": 0.0,
+                "initialized_at": time.time()
+            })
+            data = {"balance": 100.0, "total_spent": 0.0}
+        balance = float(data.get("balance", 0))
+        if balance < amount:
+            return False
+        new_balance = round(balance - amount, 2)
+        ref.update({
+            "balance": new_balance,
+            "total_spent": round(float(data.get("total_spent", 0)) + amount, 2)
+        })
+        firebase_db.reference(f"/credit_transactions/{uid}").push({
+            "type": "spent",
+            "amount": -amount,
+            "job_id": job_id,
+            "balance_after": new_balance,
+            "timestamp": time.time()
+        })
+        return True
+    try:
+        return await asyncio.to_thread(_write)
+    except Exception as e:
+        print(f"[db] deduct_credits failed: {e}")
+        return False
+
+async def db_earn_credits(uid: str, amount: float, job_id: str):
+    def _write():
+        ref = firebase_db.reference(f"/credits/{uid}")
+        data = ref.get()
+        if not data:
+            ref.set({
+                "uid": uid,
+                "balance": 100.0,
+                "total_earned": 0.0,
+                "total_spent": 0.0,
+                "initialized_at": time.time()
+            })
+            data = {"balance": 100.0, "total_earned": 0.0, "total_spent": 0.0}
+            
+        balance = float(data.get("balance", 0))
+        new_balance = round(balance + amount, 2)
+        ref.update({
+            "balance": new_balance,
+            "total_earned": round(float(data.get("total_earned", 0)) + amount, 2)
+        })
+        balance_after = new_balance
+        firebase_db.reference(f"/credit_transactions/{uid}").push({
+            "type": "earned",
+            "amount": amount,
+            "job_id": job_id,
+            "balance_after": balance_after,
+            "timestamp": time.time()
+        })
+    try:
+        await asyncio.to_thread(_write)
+    except Exception as e:
+        print(f"[db] earn_credits failed: {e}")
+
+async def db_refund_credits(uid: str, amount: float, job_id: str):
+    def _write():
+        ref = firebase_db.reference(f"/credits/{uid}")
+        data = ref.get()
+        if not data:
+            ref.set({
+                "uid": uid,
+                "balance": 100.0,
+                "total_earned": 0.0,
+                "total_spent": 0.0,
+                "initialized_at": time.time()
+            })
+            data = {"balance": 100.0, "total_spent": 0.0}
+        balance = float(data.get("balance", 0))
+        new_balance = round(balance + amount, 2)
+        ref.update({
+            "balance": new_balance,
+            "total_spent": round(max(float(data.get("total_spent", 0)) - amount, 0), 2)
+        })
+        firebase_db.reference(f"/credit_transactions/{uid}").push({
+            "type": "refund",
+            "amount": amount,
+            "job_id": job_id,
+            "balance_after": new_balance,
+            "timestamp": time.time()
+        })
+    try:
+        await asyncio.to_thread(_write)
+    except Exception as e:
+        print(f"[db] refund_credits failed: {e}")
+
+async def db_pay_partial_contributors(job_id: str, contributions: list, total_cost: float):
+    if not contributions:
+        return
+    total_duration = sum(c["duration_seconds"] for c in contributions)
+    if total_duration <= 0:
+        return
+    pool = round(total_cost, 2)
+    for partial in contributions:
+        fraction = partial["duration_seconds"] / total_duration
+        earn = round(pool * fraction, 2)
+        uid = partial.get("uid", "anonymous")
+        node_id = partial.get("node_id")
+        if earn > 0 and uid and uid != "anonymous":
+            await db_earn_credits(uid, earn, job_id)
+        if earn > 0 and node_id:
+            def _update_contrib(node=node_id, amount=earn):
+                firebase_db.reference(f"/contributors/{node}").child("total_credits_earned").transaction(
+                    lambda c: round((c or 0) + amount, 2)
+                )
+            try:
+                await asyncio.to_thread(_update_contrib)
+            except Exception as e:
+                print(f"[db] partial pay contributor update failed: {e}")
+        print(f"[coordinator] partial pay: {node_id} earned {earn} credits ({partial['duration_seconds']}s / {total_duration}s)")
+
+@app.get("/credits/{uid}")
+async def get_credits(uid: str):
+    def _read():
+        return firebase_db.reference(f"/credits/{uid}").get()
+    try:
+        data = await asyncio.to_thread(_read)
+        if not data:
+            return {"balance": 100.0, "total_earned": 0.0, "total_spent": 0.0}
+        return {
+            "balance": float(data.get("balance", 100.0)),
+            "total_earned": float(data.get("total_earned", 0.0)),
+            "total_spent": float(data.get("total_spent", 0.0))
+        }
+    except Exception as e:
+        return {"balance": 100.0, "total_earned": 0.0, "total_spent": 0.0, "error": str(e)}
+
+@app.get("/credits/{uid}/transactions")
+async def get_transactions(uid: str):
+    def _read():
+        data = firebase_db.reference(f"/credit_transactions/{uid}").get()
+        if not data:
+            return []
+        items = list(data.values())
+        items.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+        return items[:20]
+    try:
+        data = await asyncio.to_thread(_read)
+        return {"transactions": data}
+    except Exception as e:
+        return {"transactions": [], "error": str(e)}
 
 def score_contributor(conn, use_gpu: bool) -> float:
     if use_gpu:
@@ -248,6 +466,11 @@ class SubmitJobRequest(BaseModel):
     requirements: Optional[str] = None
     use_gpu: bool = False
     submitter_email: Optional[str] = ""
+    estimated_cost: float = 1.0
+    cpu_cores: float = 2.0
+    ram_gb: int = 4
+    gpu_vram_gb: float = 0.0
+    duration_estimate_seconds: float = 60.0
 
 @app.post("/submit-job")
 async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token)):
@@ -268,12 +491,32 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
     except Exception as exc:
         print(f"[coordinator] scanner error: {exc}")
 
-    job_id = str(uuid.uuid4())
-    job = Job(job_id=job_id, script=req.script, requirements=req.requirements, use_gpu=req.use_gpu)
     submitter_uid = user.get("uid", "anonymous") if user else "anonymous"
     submitter_email = user.get("email", "anonymous") if user else "anonymous"
+
+    if AUTH_ENABLED and submitter_uid != "anonymous":
+        balance = await db_get_credit_balance(submitter_uid)
+        if balance < 1.0:
+            return {
+                "job_id": None,
+                "assigned": False,
+                "rejected": True,
+                "reason": "insufficient_credits",
+                "balance": balance,
+                "scan_violations": [],
+                "message": f"Insufficient credits. Your balance is {balance} credits. Purchase more credits to continue."
+            }
+
+    job_id = str(uuid.uuid4())
+    job = Job(job_id=job_id, script=req.script, requirements=req.requirements, use_gpu=req.use_gpu)
     job.submitter_uid = submitter_uid
     job.submitter_email = submitter_email
+
+    if AUTH_ENABLED and submitter_uid != "anonymous":
+        estimated_cost = max(1.0, req.estimated_cost if hasattr(req, 'estimated_cost') else 1.0)
+        await db_deduct_credits(submitter_uid, estimated_cost, job_id)
+        job.estimated_cost = estimated_cost
+
     jobs[job_id] = job
     asyncio.create_task(db_upsert_user(submitter_uid, submitter_email, user.get("name", "") if user else ""))
     asyncio.create_task(db_create_job(job, submitter_uid, submitter_email))
@@ -292,6 +535,7 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
         best_conn.current_job = job_id
         job.contributor_node_id = best_conn.node_id
         job.status = "running"
+        job.current_contributor_start = time.time()
         try:
             await best_conn.ws.send_json({
                 "type": "job",
@@ -357,6 +601,7 @@ async def try_assign_pending():
         best_conn.current_job = job_id
         job.contributor_node_id = best_conn.node_id
         job.status = "running"
+        job.current_contributor_start = time.time()
         
         try:
             await best_conn.ws.send_json({
@@ -506,6 +751,8 @@ async def ws_contributor(ws: WebSocket):
                             email = decoded.get("email", "anonymous")
                         except Exception:
                             pass
+                    conn.uid = uid
+                    conn.gpu_vram_gb = round(conn.max_gpu_vram_mb / 1024, 2)
                     asyncio.create_task(db_upsert_contributor(
                         conn.node_id, uid, email,
                         conn.max_cpus, conn.max_ram_gb, conn.max_gpu_vram_mb, conn.gpu_name or ""
@@ -529,32 +776,76 @@ async def ws_contributor(ws: WebSocket):
 
             elif msg_type == "done":
                 job_id = msg.get("job_id")
+                gpu_vram_gb = msg.get("gpu_vram_gb", 0.0)
                 if job_id in jobs:
                     jobs[job_id].done = True
                     jobs[job_id].status = "complete"
-                    
                     job = jobs[job_id]
-                    duration = round(time.time() - job.submitted_at, 1)
-                    asyncio.create_task(db_job_completed(
-                        job_id,
-                        conn.node_id,
-                        "",
-                        duration,
-                        conn.max_cpus,
-                        conn.max_ram_gb,
-                        job.use_gpu,
-                        conn.gpu_name or "",
-                    ))
+                    duration = round(time.time() - (job.current_contributor_start or job.submitted_at), 1)
+                    all_contributions = job.contributions[:]
+                    estimated_cost = job.estimated_cost
+                    submitter_uid = job.submitter_uid
+                    use_gpu = job.use_gpu
+
+                    actual_cost = calculate_job_cost(duration, conn.max_cpus, conn.max_ram_gb, use_gpu, gpu_vram_gb)
+                    total_duration = sum(c["duration_seconds"] for c in all_contributions) + duration
+                    pool = round(actual_cost, 2)
+
+                    def _complete_write(
+                        jid=job_id, nid=conn.node_id, dur=duration, cpus=conn.max_cpus,
+                        ram=conn.max_ram_gb, gpu=use_gpu, gpu_name=conn.gpu_name or "",
+                        cost=actual_cost, contrib_count=len(all_contributions) + 1
+                    ):
+                        firebase_db.reference(f"/jobs/{jid}").update({
+                            "status": "complete",
+                            "contributor_node_id": nid,
+                            "completed_at": time.time(),
+                            "duration_seconds": dur,
+                            "total_duration_seconds": total_duration,
+                            "cpu_time_seconds": round(cpus * dur, 1),
+                            "gpu_time_seconds": round(dur, 1) if gpu else 0,
+                            "actual_cost_credits": cost,
+                            "contributor_count": contrib_count,
+                        })
+                        ref = firebase_db.reference(f"/contributors/{nid}")
+                        existing = ref.get()
+                        if existing:
+                            ref.update({
+                                "total_jobs_executed": (existing.get("total_jobs_executed") or 0) + 1,
+                                "total_cpu_time_seconds": round((existing.get("total_cpu_time_seconds") or 0) + cpus * dur, 1),
+                                "total_gpu_time_seconds": round((existing.get("total_gpu_time_seconds") or 0) + (dur if gpu else 0), 1),
+                                "last_seen": time.time(),
+                            })
+
+                    asyncio.create_task(asyncio.to_thread(_complete_write))
+
+                    if AUTH_ENABLED:
+                        if submitter_uid and submitter_uid != "anonymous":
+                            if estimated_cost > actual_cost:
+                                refund = round(estimated_cost - actual_cost, 2)
+                                asyncio.create_task(db_refund_credits(submitter_uid, refund, job_id))
+
+                        if total_duration > 0:
+                            final_fraction = duration / total_duration
+                            final_earn = round(pool * final_fraction, 2)
+                            if final_earn > 0 and conn.uid and conn.uid != "anonymous":
+                                asyncio.create_task(db_earn_credits(conn.uid, final_earn, job_id))
+                            if final_earn > 0:
+                                def _update_final(nid=conn.node_id, earn=final_earn):
+                                    firebase_db.reference(f"/contributors/{nid}").child("total_credits_earned").transaction(
+                                        lambda c: round((c or 0) + earn, 2)
+                                    )
+                                asyncio.create_task(asyncio.to_thread(_update_final))
+
+                            if all_contributions:
+                                asyncio.create_task(db_pay_partial_contributors(job_id, all_contributions, actual_cost))
 
                 conn.busy = False
                 conn.current_job = None
                 sub_ws = submitter_connections.get(job_id)
                 if sub_ws:
                     try:
-                        await sub_ws.send_json({
-                            "type": "done",
-                            "job_id": job_id,
-                        })
+                        await sub_ws.send_json({"type": "done", "job_id": job_id})
                     except Exception:
                         pass
                 await try_assign_pending()
@@ -567,12 +858,42 @@ async def ws_contributor(ws: WebSocket):
         if conn.current_job:
             job = jobs.get(conn.current_job)
             if job and not job.done:
+                if job.current_contributor_start:
+                    partial_duration = round(time.time() - job.current_contributor_start, 1)
+                    if partial_duration > 0:
+                        job.contributions.append({
+                            "node_id": conn.node_id,
+                            "uid": conn.uid,
+                            "started_at": job.current_contributor_start,
+                            "ended_at": time.time(),
+                            "duration_seconds": partial_duration,
+                            "cpu_cores": conn.max_cpus,
+                            "ram_gb": conn.max_ram_gb,
+                            "gpu_vram_gb": conn.gpu_vram_gb,
+                        })
+                        job.current_contributor_start = None
+                        print(f"[coordinator] partial contribution recorded: {conn.node_id} worked {partial_duration}s")
+
                 job.retry_count += 1
-                if job.retry_count <= job.max_retries:
+                if job.retry_count > job.max_retries:
+                    job.status = "failed"
+                    if AUTH_ENABLED and job.submitter_uid and job.submitter_uid != "anonymous":
+                        asyncio.create_task(db_refund_credits(job.submitter_uid, job.estimated_cost, conn.current_job))
+                        asyncio.create_task(db_pay_partial_contributors(conn.current_job, job.contributions, job.estimated_cost))
+                    sub_ws = submitter_connections.get(conn.current_job)
+                    if sub_ws:
+                        try:
+                            await sub_ws.send_json({
+                                "type": "failed",
+                                "job_id": conn.current_job,
+                                "message": f"Job failed after {job.max_retries} attempts — credits refunded"
+                            })
+                        except Exception:
+                            pass
+                else:
                     job.status = "pending"
                     job.contributor_node_id = None
                     pending_jobs.appendleft(conn.current_job)
-                    print(f"[coordinator] contributor dropped — requeued job {conn.current_job} (retry {job.retry_count}/{job.max_retries})")
                     sub_ws = submitter_connections.get(conn.current_job)
                     if sub_ws:
                         try:
@@ -581,21 +902,8 @@ async def ws_contributor(ws: WebSocket):
                                 "job_id": conn.current_job,
                                 "status": "pending",
                                 "queue_position": 1,
-                                "message": f"Contributor disconnected — reassigning job (attempt {job.retry_count}/{job.max_retries})...",
+                                "message": f"Contributor disconnected — reassigning (attempt {job.retry_count}/{job.max_retries})...",
                                 "checkpoint_epoch": job.checkpoint_epoch
-                            })
-                        except Exception:
-                            pass
-                else:
-                    job.status = "failed"
-                    print(f"[coordinator] job {conn.current_job} failed after {job.max_retries} retries")
-                    sub_ws = submitter_connections.get(conn.current_job)
-                    if sub_ws:
-                        try:
-                            await sub_ws.send_json({
-                                "type": "failed",
-                                "job_id": conn.current_job,
-                                "message": f"Job failed after {job.max_retries} attempts — no contributors available"
                             })
                         except Exception:
                             pass

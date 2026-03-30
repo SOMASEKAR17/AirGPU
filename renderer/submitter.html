@@ -115,6 +115,8 @@
     .file-label {
       display: flex;
       align-items: center;
+      justify-content: center;
+      flex-direction: row;
       gap: 8px;
       padding: 10px 18px;
       background: var(--lavender);
@@ -293,6 +295,15 @@
       background: #D8D8D8;
       border-radius: 3px;
     }
+
+    .role-icon-img{
+      width: 20px;
+      height: 20px;
+      background: var(--lavender);
+      margin: 20px auto 20px;
+      font-size: 1.5rem;
+    }
+
     .log-body::-webkit-scrollbar-thumb:hover { background: #B0B0B0; }
   </style>
 </head>
@@ -314,13 +325,13 @@
     
     <div class="upload-bar">
       <label class="file-label" id="file-picker-label">
-        📁 Choose .py file
+        <img class="role-icon-img" src="../public/folder.png" alt=""> Choose .py file
         <input type="file" id="file-input" accept=".py" />
       </label>
       <span class="file-name" id="file-name">No file selected</span>
 
       <label class="file-label" id="req-picker-label">
-        📋 requirements.txt (optional)
+        <img class="role-icon-img" src="../public/file.png" alt=""> requirements.txt (optional)
         <input type="file" id="req-input" accept=".txt" />
       </label>
       <span class="file-name" id="req-name">No requirements</span>

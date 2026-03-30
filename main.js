@@ -65,6 +65,23 @@ ipcMain.handle("logout", () => {
   mainWindow.loadFile(path.join(__dirname, "renderer", "login.html"));
 });
 
+const CREDITS_PAGE_URL = "PLACEHOLDER_URL";
+const coordinatorHost = process.env.COORDINATOR_HOST || 'localhost';
+
+ipcMain.handle('open-credits-page', () => {
+    shell.openExternal(CREDITS_PAGE_URL);
+});
+
+ipcMain.handle('get-coordinator-base', () => {
+    return `http://${coordinatorHost}:8000`;
+});
+
+ipcMain.handle('update-credit-display', (event, balance) => {
+    if (mainWindow) {
+        mainWindow.webContents.send('credit-update', balance);
+    }
+});
+
 ipcMain.handle("start-google-auth", async () => {
   return new Promise((resolve, reject) => {
     let server = http.createServer((req, res) => {
@@ -76,7 +93,7 @@ ipcMain.handle("start-google-auth", async () => {
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Compound \u2014 Authenticating</title>
+    <title>AirGPU \u2014 Authenticating</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Playfair+Display:wght@600&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -117,7 +134,7 @@ ipcMain.handle("start-google-auth", async () => {
 </head>
 <body>
     <div class="container">
-        <h1>compound</h1>
+        <h1>AirGPU</h1>
         <div class="loader"><div class="loader-bar"></div></div>
         <p id="status">Verifying session...</p>
         <button id="action-btn"></button>
@@ -218,7 +235,7 @@ ipcMain.handle("start-google-auth", async () => {
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Compound \u2014 Authenticated</title>
+    <title>AirGPU \u2014 Authenticated</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Playfair+Display:wght@600&display=swap" rel="stylesheet">
     <style>
         :root { --bg: #FDFCF8; --text: #1A1A1A; --slate: #4A4A4A; }
@@ -239,7 +256,7 @@ ipcMain.handle("start-google-auth", async () => {
 <body>
     <div class="container">
         <div class="check">✓</div>
-        <h1>compound</h1>
+        <h1>AirGPU</h1>
         <p>Login successful — you can close this tab.</p>
     </div>
     <script>

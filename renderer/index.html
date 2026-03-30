@@ -67,6 +67,35 @@
       transition: background 0.15s;
     }
     #logout-btn:hover { background: var(--lavender); }
+    #credit-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: #1a1a1a;
+        border: 1px solid #2a2a2a;
+        border-radius: 20px;
+        padding: 4px 12px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 13px;
+    }
+    #credit-badge:hover {
+        border-color: #C9A84C;
+        background: #1f1a0f;
+    }
+    #credit-icon {
+        color: #C9A84C;
+        font-size: 14px;
+    }
+    #credit-amount {
+        color: #fff;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+    }
+    #credit-label {
+        color: #888;
+        font-size: 11px;
+    }
     .titlebar-spacer { flex: 1; }
     .titlebar-btn {
       -webkit-app-region: no-drag;
@@ -212,6 +241,18 @@
       letter-spacing: 0.03em;
     }
 
+    .role-icon-img{
+      width: 56px;
+      height: 56px;
+      border-radius: 14px;
+      background: var(--lavender);
+      margin: 0 auto 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+    }
+
     
     @keyframes fadeUp {
       from { opacity: 0; transform: translateY(18px); }
@@ -226,8 +267,13 @@
   <!-- Title bar -->
   <div class="titlebar">
     <div id="user-bar">
-      <img id="user-avatar" style="display:none; width:28px; height:28px; border-radius:50%;" />
+      <img id="user-avatar" style="display:none; width:28px; height:28px; border-radius:50%; object-fit:cover;" />
       <span id="user-name"></span>
+      <div id="credit-badge" onclick="window.electronAPI.openCreditsPage()" title="Click to buy more credits">
+          <span id="credit-icon">◈</span>
+          <span id="credit-amount">—</span>
+          <span id="credit-label">credits</span>
+      </div>
       <button id="logout-btn" onclick="window.electronAPI.logout()">Sign out</button>
     </div>
     <div class="titlebar-spacer"></div>
@@ -247,13 +293,17 @@
 
       <div class="roles">
         <div class="role-card" id="role-submit">
-          <div class="role-icon">📤</div>
+          <div class="role-icon">
+            <img class="role-icon-img" src="../public/upload.png" alt="">
+          </div>
           <div class="role-title">Submit a Job</div>
           <div class="role-desc">Upload a Python script and watch it execute on a remote machine in real time.</div>
         </div>
 
         <div class="role-card" id="role-contribute">
-          <div class="role-icon">⚡</div>
+          <div class="role-icon">
+            <img class="role-icon-img" src="../public/gpu.png" alt="">
+          </div>
           <div class="role-title">Contribute Compute</div>
           <div class="role-desc">Lend your machine's resources. Jobs run sandboxed inside Docker containers.</div>
         </div>
@@ -270,7 +320,10 @@
       getUser: () => ipcRenderer.invoke('get-user'),
       logout: () => ipcRenderer.invoke('logout'),
       navigate: (page) => ipcRenderer.send('navigate', page),
-      startAgent: (cfg) => ipcRenderer.send('start-agent', cfg)
+      startAgent: (cfg) => ipcRenderer.send('start-agent', cfg),
+      openCreditsPage: () => ipcRenderer.invoke('open-credits-page'),
+      getCoordinatorBase: () => ipcRenderer.invoke('get-coordinator-base'),
+      updateCreditDisplay: (balance) => ipcRenderer.invoke('update-credit-display', balance)
     };
 
     // Window controls
@@ -297,6 +350,29 @@
         }
       }
     })();
+
+    ipcRenderer.on('credit-update', (event, balance) => {
+        document.getElementById('credit-amount').textContent = parseFloat(balance).toFixed(1);
+    });
+
+    async function loadCredits() {
+        try {
+            const token = await window.electronAPI.getAuthToken();
+            const user = await window.electronAPI.getUser();
+            if (!token || !user) return;
+            const decoded = JSON.parse(atob(token.split('.')[1]));
+            const uid = decoded.user_id || decoded.uid || decoded.sub;
+            if (!uid) return;
+            const coordinatorBase = await window.electronAPI.getCoordinatorBase();
+            const res = await fetch(`${coordinatorBase}/credits/${uid}`);
+            const data = await res.json();
+            document.getElementById('credit-amount').textContent = parseFloat(data.balance).toFixed(1);
+        } catch(e) {
+            document.getElementById('credit-amount').textContent = '—';
+        }
+    }
+
+    loadCredits();
   </script>
 </body>
 </html>

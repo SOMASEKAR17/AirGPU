@@ -275,7 +275,15 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
     except Exception:
         pass
 
-    done_msg = {"type": "done", "job_id": job_id}
+    gpu_vram_gb = 0.0
+    if use_gpu and GPU_INFO:
+        gpu_vram_gb = round(MAX_GPU_VRAM_MB / 1024, 2)
+
+    done_msg = {
+        "type": "done",
+        "job_id": job_id,
+        "gpu_vram_gb": gpu_vram_gb
+    }
     try:
         await ws.send(json.dumps(done_msg))
     except Exception:

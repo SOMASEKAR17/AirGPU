@@ -293,10 +293,21 @@
       display: flex;
       gap: 16px;
       color: var(--slate);
+      align-items: center;
     }
     #history-summary strong {
       color: var(--black);
       font-family: var(--font-mono);
+    }
+    .stat-chip {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .stat-val { font-weight: 600; font-family: var(--font-mono); }
+    .stat-lbl { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--slate); }
+    #credits-earned {
+        color: #C9A84C;
     }
     #history-list {
       display: flex;
@@ -553,6 +564,10 @@
       <div id="history-summary">
         <span>CPU Hours: <strong id="cpu-hours">0h</strong></span>
         <span>GPU Hours: <strong id="gpu-hours">0h</strong></span>
+        <div class="stat-chip">
+            <span class="stat-val" id="credits-earned">0.00</span>
+            <span class="stat-lbl">credits earned</span>
+        </div>
       </div>
       <div id="history-list">
         <div id="history-empty">No jobs completed yet \u2014 waiting for work...</div>

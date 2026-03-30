@@ -8,7 +8,10 @@ window.electronAPI = window.electronAPI || {
   getUser: () => ipcRenderer.invoke('get-user'),
   logout: () => ipcRenderer.invoke('logout'),
   navigate: (page) => ipcRenderer.send('navigate', page),
-  startAgent: (cfg) => ipcRenderer.send('start-agent', cfg)
+  startAgent: (cfg) => ipcRenderer.send('start-agent', cfg),
+  openCreditsPage: () => ipcRenderer.invoke('open-credits-page'),
+  getCoordinatorBase: () => ipcRenderer.invoke('get-coordinator-base'),
+  updateCreditDisplay: (balance) => ipcRenderer.invoke('update-credit-display', balance)
 };
 
 
@@ -93,6 +96,16 @@ btnSubmit.addEventListener("click", async () => {
     const user = await window.electronAPI.getUser();
     const submitterEmail = user?.email || "anonymous";
 
+    const durationEstimate = 60.0;
+    const cpuCores = 2.0;
+    const ramGb = 4;
+    const gpuVramGb = useGpuCheckbox && useGpuCheckbox.checked ? 6.0 : 0.0;
+
+    const cpuCost = cpuCores * durationEstimate * 0.01;
+    const ramCost = ramGb * durationEstimate * 0.005;
+    const gpuCost = gpuVramGb * durationEstimate * 0.05;
+    const estimatedCost = Math.max(1.0, parseFloat((cpuCost + ramCost + gpuCost).toFixed(2)));
+
     const res = await fetch(`${COORDINATOR_HTTP}/submit-job`, {
       method: "POST",
       headers: {
@@ -102,14 +115,27 @@ btnSubmit.addEventListener("click", async () => {
       body: JSON.stringify({ 
         script: selectedFileContents,
         requirements: selectedReqContents,
-        use_gpu: useGpuCheckbox.checked,
-        submitter_email: submitterEmail
+        use_gpu: useGpuCheckbox ? useGpuCheckbox.checked : false,
+        submitter_email: submitterEmail,
+        estimated_cost: estimatedCost,
+        cpu_cores: cpuCores,
+        ram_gb: ramGb,
+        gpu_vram_gb: gpuVramGb,
+        duration_estimate_seconds: durationEstimate
       }),
     });
 
     const data = await res.json();
     
     
+    if (data.rejected && data.reason === "insufficient_credits") {
+        setStatus("error", "Error");
+        appendLogLine(`✗ Insufficient credits — balance: ${data.balance} credits`);
+        appendLogLine(`Purchase credits to continue submitting jobs.`);
+        btnSubmit.disabled = false;
+        return;
+    }
+
     if (data.rejected) {
         setStatus("error", "Error");
         appendLogLine("✗ Job rejected — code security scan failed\n");
@@ -204,6 +230,7 @@ async function connectSubmitterWS(jobId) {
 
       setStatus("complete", "Complete");
       btnSubmit.disabled = false;
+      refreshCreditBalance();
       ws.close();
     }
   };
@@ -242,3 +269,19 @@ function setStatus(type, text) {
   statusBadge.className = `status-badge ${type}`;
   statusText.textContent = text;
 }
+
+async function refreshCreditBalance() {
+    try {
+        const token = await window.electronAPI.getAuthToken();
+        if (!token) return;
+        const decoded = JSON.parse(atob(token.split('.')[1]));
+        const uid = decoded.user_id || decoded.uid || decoded.sub;
+        if (!uid) return;
+        const res = await fetch(`${COORDINATOR_HTTP}/credits/${uid}`);
+        const data = await res.json();
+        const balance = parseFloat(data.balance).toFixed(1);
+        await window.electronAPI.updateCreditDisplay(balance);
+    } catch(e) {}
+}
+
+refreshCreditBalance();

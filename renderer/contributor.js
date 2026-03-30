@@ -7,7 +7,10 @@ window.electronAPI = window.electronAPI || {
   getUser: () => ipcRenderer.invoke('get-user'),
   logout: () => ipcRenderer.invoke('logout'),
   navigate: (page) => ipcRenderer.send('navigate', page),
-  startAgent: (cfg) => ipcRenderer.send('start-agent', cfg)
+  startAgent: (cfg) => ipcRenderer.send('start-agent', cfg),
+  openCreditsPage: () => ipcRenderer.invoke('open-credits-page'),
+  getCoordinatorBase: () => ipcRenderer.invoke('get-coordinator-base'),
+  updateCreditDisplay: (balance) => ipcRenderer.invoke('update-credit-display', balance)
 };
 
 
@@ -39,7 +42,16 @@ document.getElementById("btn-back").addEventListener("click",     () => ipcRende
 let isConnected = false;
 let currentJobId = null;
 let currentNodeId = null;
-const coordinatorUrl = "ws://10.212.87.185:8000/ws/contributor";
+let coordinatorUrl = "ws://localhost:8000/ws/contributor";
+
+(async () => {
+    try {
+        const base = await window.electronAPI.getCoordinatorBase();
+        if (base) {
+            coordinatorUrl = base.replace("http://", "ws://").replace("https://", "wss://") + "/ws/contributor";
+        }
+    } catch(e) {}
+})();
 
 setInterval(() => {
     if (currentNodeId) fetchAndRenderHistory();
@@ -48,52 +60,41 @@ setInterval(() => {
 async function fetchAndRenderHistory() {
     const nodeId = currentNodeId;
     if (!nodeId) return;
-
     try {
-        const wsUrl = new URL(coordinatorUrl);
-        const base = `http://${wsUrl.host}`;
-
+        const base = await window.electronAPI.getCoordinatorBase();
         const [statsRes, jobsRes] = await Promise.all([
             fetch(`${base}/db/contributor/${nodeId}`),
             fetch(`${base}/db/contributor/${nodeId}/jobs`)
         ]);
-
         const stats = await statsRes.json();
         const jobsData = await jobsRes.json();
         const jobsList = jobsData.jobs || [];
-
-        console.log("[history] stats:", stats);
-        console.log("[history] jobs:", jobsList);
-
         const totalJobs = stats.total_jobs_executed || 0;
         const cpuHours = ((stats.total_cpu_time_seconds || 0) / 3600).toFixed(2);
         const gpuHours = ((stats.total_gpu_time_seconds || 0) / 3600).toFixed(2);
-
-        document.getElementById("history-count").textContent =
-            `${totalJobs} job${totalJobs !== 1 ? "s" : ""} completed`;
+        const creditsEarned = (stats.total_credits_earned || 0).toFixed(2);
+        document.getElementById("history-count").textContent = `${totalJobs} job${totalJobs !== 1 ? "s" : ""} completed`;
         document.getElementById("cpu-hours").textContent = `${cpuHours}h`;
         document.getElementById("gpu-hours").textContent = `${gpuHours}h`;
-
+        document.getElementById("credits-earned").textContent = creditsEarned;
         const list = document.getElementById("history-list");
-
         if (!jobsList || jobsList.length === 0) {
             list.innerHTML = `<div id="history-empty">No jobs completed yet — waiting for work...</div>`;
             return;
         }
-
         list.innerHTML = "";
         jobsList.forEach((job, i) => {
             const row = document.createElement("div");
             row.className = "history-row";
             row.style.animationDelay = `${i * 0.05}s`;
-
             const gpuTag = job.use_gpu
                 ? `<span class="resource-tag gpu-tag">GPU · ${job.gpu_name || "GPU"}</span>`
                 : `<span class="resource-tag">No GPU</span>`;
-
             const duration = job.duration_seconds != null ? `${job.duration_seconds}s` : "—";
             const cpuTime = job.cpu_time_seconds != null ? `${job.cpu_time_seconds}s CPU` : "";
-
+            const earnedTag = job.contributor_earned_credits
+                ? `<span class="resource-tag" style="color:#C9A84C">+${job.contributor_earned_credits} cr</span>`
+                : "";
             row.innerHTML = `
                 <div class="history-row-top">
                     <span class="job-id">job #${job.job_id.slice(0, 8)}</span>
@@ -104,7 +105,7 @@ async function fetchAndRenderHistory() {
                     <span class="resource-tag">CPU · ${job.cpu_cores || "?"} cores</span>
                     <span class="resource-tag">RAM · ${job.ram_gb || "?"}GB</span>
                     ${gpuTag}
-                    <span class="resource-tag">${job.script_lines || "?"} lines</span>
+                    ${earnedTag}
                     ${cpuTime ? `<span class="resource-tag">${cpuTime}</span>` : ""}
                 </div>
             `;
