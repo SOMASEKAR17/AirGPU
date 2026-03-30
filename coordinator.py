@@ -845,7 +845,11 @@ async def ws_contributor(ws: WebSocket):
                 sub_ws = submitter_connections.get(job_id)
                 if sub_ws:
                     try:
-                        await sub_ws.send_json({"type": "done", "job_id": job_id})
+                        await sub_ws.send_json({
+                            "type": "done", 
+                            "job_id": job_id,
+                            "actual_cost": actual_cost
+                        })
                     except Exception:
                         pass
                 await try_assign_pending()

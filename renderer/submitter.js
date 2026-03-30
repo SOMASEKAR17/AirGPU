@@ -226,6 +226,15 @@ async function connectSubmitterWS(jobId) {
       doneEl.className = "log-line log-complete";
       doneEl.textContent = "✓ Job Complete";
       logBody.appendChild(doneEl);
+
+      if (msg.actual_cost !== undefined) {
+          const costEl = document.createElement("div");
+          costEl.className = "log-line";
+          costEl.style.color = "#C9A84C";
+          costEl.textContent = `Cost: ${parseFloat(msg.actual_cost).toFixed(2)} credits`;
+          logBody.appendChild(costEl);
+      }
+
       logBody.scrollTop = logBody.scrollHeight;
 
       setStatus("complete", "Complete");
