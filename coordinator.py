@@ -2,7 +2,7 @@ import os
 import base64
 import uuid
 import json
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from collections import deque
 import time
 import asyncio
@@ -45,7 +45,11 @@ async def optional_verify_token(credentials: HTTPAuthorizationCredentials = Depe
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), "checkpoints")
+DATASETS_DIR = os.path.join(os.path.dirname(__file__), "datasets")
+OUTPUTS_DIR = os.path.join(os.path.dirname(__file__), "outputs")
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+os.makedirs(DATASETS_DIR, exist_ok=True)
+os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
 app = FastAPI()
 
@@ -94,6 +98,8 @@ class Job:
         self.estimated_cost = 1.0
         self.contributions = []
         self.current_contributor_start = None
+        self.dataset_filename = None
+        self.output_extensions = []
 
 contributors: Dict[int, ContributorConnection] = {}
 jobs: Dict[str, Job] = {}
@@ -169,6 +175,7 @@ async def db_create_job(job: "Job", submitter_uid: str, submitter_email: str):
             "gpu_time_seconds": None,
             "retry_count": 0,
             "checkpoint_epoch": 0,
+            "dataset_filename": job.dataset_filename,
         })
         firebase_db.reference(f"/users/{submitter_uid}/total_jobs_submitted").transaction(
             lambda current: (current or 0) + 1
@@ -471,6 +478,8 @@ class SubmitJobRequest(BaseModel):
     ram_gb: int = 4
     gpu_vram_gb: float = 0.0
     duration_estimate_seconds: float = 60.0
+    dataset_filename: Optional[str] = None
+    output_extensions: Optional[List[str]] = None
 
 @app.post("/submit-job")
 async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token)):
@@ -511,6 +520,8 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
     job = Job(job_id=job_id, script=req.script, requirements=req.requirements, use_gpu=req.use_gpu)
     job.submitter_uid = submitter_uid
     job.submitter_email = submitter_email
+    job.dataset_filename = req.dataset_filename
+    job.output_extensions = req.output_extensions or [".pkl", ".pt", ".h5", ".csv", ".json", ".txt", ".png", ".jpg"]
 
     if AUTH_ENABLED and submitter_uid != "anonymous":
         estimated_cost = max(1.0, req.estimated_cost if hasattr(req, 'estimated_cost') else 1.0)
@@ -545,6 +556,8 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
                 "use_gpu": job.use_gpu,
                 "resume_from_epoch": job.checkpoint_epoch,
                 "coordinator_url": COORDINATOR_HTTP,
+                "dataset_filename": getattr(job, "dataset_filename", None),
+                "output_extensions": getattr(job, "output_extensions", [".pkl", ".pt", ".h5", ".csv", ".json", ".txt", ".png", ".jpg"]),
             })
             assigned = True
             
@@ -612,6 +625,8 @@ async def try_assign_pending():
                 "use_gpu": job.use_gpu,
                 "resume_from_epoch": job.checkpoint_epoch,
                 "coordinator_url": COORDINATOR_HTTP,
+                "dataset_filename": getattr(job, "dataset_filename", None),
+                "output_extensions": getattr(job, "output_extensions", [".pkl", ".pt", ".h5", ".csv", ".json", ".txt", ".png", ".jpg"]),
             })
             
             if best_conn.node_id:
@@ -703,6 +718,95 @@ async def get_checkpoint(job_id: str):
         "checkpoint": checkpoint_data,
         "epoch": job.checkpoint_epoch
     }
+
+@app.post("/upload-dataset")
+async def upload_dataset(request: Request, user=Depends(optional_verify_token)):
+    body = await request.json()
+    filename = body.get("filename", "dataset.bin")
+    data_b64 = body.get("data")
+    job_id = body.get("job_id")
+
+    if not data_b64 or not job_id:
+        return {"error": "missing data or job_id"}
+
+    safe_filename = os.path.basename(filename)
+    dataset_path = os.path.join(DATASETS_DIR, f"{job_id}_{safe_filename}")
+
+    try:
+        with open(dataset_path, "wb") as f:
+            f.write(base64.b64decode(data_b64))
+        print(f"[coordinator] dataset saved: {dataset_path}")
+        return {"saved": True, "filename": safe_filename, "path": dataset_path}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/upload-output/{job_id}")
+async def upload_output(job_id: str, request: Request):
+    body = await request.json()
+    filename = body.get("filename", "output.bin")
+    data_b64 = body.get("data")
+
+    if not data_b64:
+        return {"error": "missing data"}
+
+    safe_filename = os.path.basename(filename)
+    job_output_dir = os.path.join(OUTPUTS_DIR, job_id)
+    os.makedirs(job_output_dir, exist_ok=True)
+    output_path = os.path.join(job_output_dir, safe_filename)
+
+    try:
+        with open(output_path, "wb") as f:
+            f.write(base64.b64decode(data_b64))
+        print(f"[coordinator] output saved: {output_path}")
+
+        sub_ws = submitter_connections.get(job_id)
+        if sub_ws:
+            try:
+                await sub_ws.send_json({
+                    "type": "output_file",
+                    "job_id": job_id,
+                    "filename": safe_filename,
+                    "download_url": f"/download-output/{job_id}/{safe_filename}"
+                })
+            except Exception:
+                pass
+
+        return {"saved": True, "filename": safe_filename}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/download-output/{job_id}/{filename}")
+async def download_output(job_id: str, filename: str):
+    from fastapi.responses import FileResponse
+    safe_filename = os.path.basename(filename)
+    output_path = os.path.join(OUTPUTS_DIR, job_id, safe_filename)
+    if not os.path.exists(output_path):
+        raise HTTPException(status_code=404, detail="Output file not found")
+    return FileResponse(output_path, filename=safe_filename)
+
+@app.get("/list-outputs/{job_id}")
+async def list_outputs(job_id: str):
+    job_output_dir = os.path.join(OUTPUTS_DIR, job_id)
+    if not os.path.exists(job_output_dir):
+        return {"files": []}
+    files = []
+    for fname in os.listdir(job_output_dir):
+        fpath = os.path.join(job_output_dir, fname)
+        files.append({
+            "filename": fname,
+            "size_bytes": os.path.getsize(fpath),
+            "download_url": f"/download-output/{job_id}/{fname}"
+        })
+    return {"files": files}
+
+@app.get("/datasets/{filename}")
+async def serve_dataset(filename: str):
+    from fastapi.responses import FileResponse
+    safe_filename = os.path.basename(filename)
+    dataset_path = os.path.join(DATASETS_DIR, safe_filename)
+    if not os.path.exists(dataset_path):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return FileResponse(dataset_path)
 
 @app.websocket("/ws/contributor")
 async def ws_contributor(ws: WebSocket):
@@ -993,7 +1097,6 @@ async def get_contributor_stats(node_id: str):
     except Exception as e:
         return {"error": str(e)}
 
-
 @app.get("/db/contributor/{node_id}/jobs")
 async def get_contributor_jobs(node_id: str):
     def _read():
@@ -1011,7 +1114,6 @@ async def get_contributor_jobs(node_id: str):
         return {"jobs": data}
     except Exception as e:
         return {"jobs": [], "error": str(e)}
-
 
 @app.get("/db/user/{uid}")
 async def get_user_stats(uid: str):

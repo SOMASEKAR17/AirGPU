@@ -99,6 +99,53 @@ def download_checkpoint(job_id: str) -> tuple:
         print(f"[agent] checkpoint download failed: {e}")
     return None, 0
 
+def download_dataset(job_id: str, filename: str, dest_dir: str) -> str:
+    try:
+        url = f"{COORDINATOR_HTTP}/datasets/{job_id}_{filename}"
+        req = urllib.request.Request(url, method="GET")
+        dest_path = os.path.join(dest_dir, filename)
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            with open(dest_path, "wb") as f:
+                f.write(resp.read())
+        print(f"[agent] dataset downloaded: {filename}")
+        return dest_path
+    except Exception as e:
+        print(f"[agent] dataset download failed: {e}")
+        return None
+
+def upload_output_file(job_id: str, filepath: str):
+    try:
+        filename = os.path.basename(filepath)
+        with open(filepath, "rb") as f:
+            data = base64.b64encode(f.read()).decode("utf-8")
+        payload = json.dumps({
+            "filename": filename,
+            "data": data
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{COORDINATOR_HTTP}/upload-output/{job_id}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        urllib.request.urlopen(req, timeout=60)
+        print(f"[agent] output uploaded: {filename}")
+    except Exception as e:
+        print(f"[agent] output upload failed: {filename} — {e}")
+
+def collect_and_upload_outputs(job_id: str, tmpdir: str, output_extensions: list):
+    default_extensions = [".pkl", ".pt", ".h5", ".csv", ".json", ".txt", ".png", ".jpg", ".npy", ".npz", ".onnx", ".pth"]
+    extensions = set(output_extensions or default_extensions)
+    for fname in os.listdir(tmpdir):
+        fpath = os.path.join(tmpdir, fname)
+        if not os.path.isfile(fpath):
+            continue
+        if fname == "job.py" or fname == "requirements.txt" or fname == "checkpoint.pt":
+            continue
+        ext = os.path.splitext(fname)[1].lower()
+        if ext in extensions:
+            upload_output_file(job_id, fpath)
+
 async def send_heartbeats(ws):
     while True:
         cpu_percent = psutil.cpu_percent(interval=None)
@@ -127,7 +174,7 @@ async def send_heartbeats(ws):
             break
         await asyncio.sleep(5)
 
-async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gpu: bool = False, resume_from_epoch: int = 0, coordinator_url: str = None):
+async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gpu: bool = False, resume_from_epoch: int = 0, coordinator_url: str = None, dataset_filename: str = None, output_extensions: list = None):
     global COORDINATOR_HTTP
     if coordinator_url:
         COORDINATOR_HTTP = coordinator_url
@@ -157,6 +204,27 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(script)
 
+    if dataset_filename:
+        dataset_dest = download_dataset(job_id, dataset_filename, tmpdir)
+        if dataset_dest:
+            try:
+                await ws.send(json.dumps({
+                    "type": "log",
+                    "job_id": job_id,
+                    "line": f"[agent] dataset loaded: {dataset_filename}"
+                }))
+            except Exception:
+                pass
+        else:
+            try:
+                await ws.send(json.dumps({
+                    "type": "log",
+                    "job_id": job_id,
+                    "line": f"[agent] warning: dataset {dataset_filename} could not be loaded"
+                }))
+            except Exception:
+                pass
+
     mount_path = tmpdir.replace("\\", "/")
     if platform.system() == "Windows" and mount_path[1] == ":":
         mount_path = "/" + mount_path[0].lower() + mount_path[2:]
@@ -180,6 +248,9 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
         "-e", f"COORDINATOR_HTTP={COORDINATOR_HTTP}",
         "-e", f"CHECKPOINT_PATH=/app/checkpoint.pt"
     ]
+
+    if dataset_filename:
+        docker_cmd.extend(["-e", f"DATASET_PATH=/app/{dataset_filename}"])
 
     if use_gpu and HAS_GPU and MAX_GPU_VRAM_MB > 0:
         docker_cmd.extend([
@@ -269,6 +340,17 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
     await proc.wait()
     duration = time.time() - start_time
     
+    if proc.returncode == 0:
+        collect_and_upload_outputs(job_id, tmpdir, output_extensions or [])
+        try:
+            await ws.send(json.dumps({
+                "type": "log",
+                "job_id": job_id,
+                "line": "[agent] output files uploaded — available for download"
+            }))
+        except Exception:
+            pass
+
     try:
         stats_line = f"[agent] job completed in {duration:.2f}s (Used: {MAX_CPUS} CPUs, {MAX_RAM_GB}GB RAM max)"
         await ws.send(json.dumps({"type": "log", "job_id": job_id, "line": stats_line}))
@@ -322,7 +404,9 @@ async def main():
                             use_gpu = msg.get("use_gpu", False)
                             resume_from_epoch = msg.get("resume_from_epoch", 0)
                             coordinator_url = msg.get("coordinator_url")
-                            await run_job(ws, job_id, script, requirements, use_gpu, resume_from_epoch, coordinator_url)
+                            dataset_filename = msg.get("dataset_filename")
+                            output_extensions = msg.get("output_extensions", [])
+                            await run_job(ws, job_id, script, requirements, use_gpu, resume_from_epoch, coordinator_url, dataset_filename, output_extensions)
                 except websockets.ConnectionClosed:
                     print("[agent] connection closed")
                 finally:

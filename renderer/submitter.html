@@ -34,11 +34,10 @@
       font-family: var(--font-sans);
       background: var(--lavender);
       color: var(--black);
-      overflow: hidden;
+      overflow-y: auto;
       -webkit-font-smoothing: antialiased;
     }
 
-    
     .titlebar {
       -webkit-app-region: drag;
       height: 38px;
@@ -90,16 +89,13 @@
     .btn-minimize { background: #FFBD2E; }
     .btn-maximize { background: #28C840; }
 
-    
     .page {
       padding: 62px 32px 32px;
-      height: 100%;
+      min-height: 100%;
       display: flex;
       flex-direction: column;
-      overflow: hidden;
     }
 
-    
     .upload-bar {
       display: flex;
       align-items: center;
@@ -109,7 +105,7 @@
       border-radius: var(--radius);
       box-shadow: var(--shadow);
       margin-bottom: 20px;
-      flex-shrink: 0;
+      flex-wrap: wrap;
     }
 
     .file-label {
@@ -136,6 +132,7 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      min-width: 100px;
     }
 
     .submit-btn {
@@ -161,7 +158,6 @@
       transform: none;
     }
 
-    
     .log-panel {
       flex: 1;
       background: var(--white);
@@ -170,7 +166,8 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      min-height: 0;
+      min-height: 300px;
+      margin-bottom: 16px;
     }
 
     .log-header {
@@ -185,15 +182,6 @@
       font-weight: 600;
       font-size: 0.85rem;
     }
-    .log-job-id {
-      font-family: var(--font-mono);
-      font-size: 0.72rem;
-      color: var(--slate);
-      background: var(--lavender);
-      padding: 3px 10px;
-      border-radius: 20px;
-    }
-
     .log-body {
       flex: 1;
       overflow-y: auto;
@@ -203,19 +191,16 @@
       line-height: 1.75;
       color: var(--slate);
     }
-
     .log-line {
       padding: 2px 0;
       animation: fadeIn 0.2s ease;
     }
-
     .log-complete {
       color: var(--green);
       font-weight: 600;
       padding: 12px 0 4px;
       font-size: 0.85rem;
     }
-
     .log-placeholder {
       display: flex;
       align-items: center;
@@ -226,7 +211,6 @@
       font-size: 0.9rem;
     }
 
-    
     .status-badge {
       display: inline-flex;
       align-items: center;
@@ -243,21 +227,18 @@
     .status-badge.complete { background: var(--green-bg); color: #2A7D55; }
     .status-badge.error    { background: var(--red-bg); color: #C0392B; }
     .badge-failed { background: #FEF2F2; color: #DC2626; }
-
     .status-dot {
       width: 7px; height: 7px;
       border-radius: 50%;
       background: currentColor;
     }
 
-    
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(4px); }
       to   { opacity: 1; transform: translateY(0); }
     }
     .page { animation: fadeIn 0.4s ease both; }
 
-    
     .gpu-toggle-box {
       display: flex;
       align-items: center;
@@ -288,28 +269,81 @@
     .gpu-toggle-label { font-weight: 600; font-size: 0.85rem; }
     .gpu-toggle-subtext { font-size: 0.75rem; color: #777; }
 
-    
     .log-body::-webkit-scrollbar { width: 6px; }
     .log-body::-webkit-scrollbar-track { background: transparent; }
     .log-body::-webkit-scrollbar-thumb {
       background: #D8D8D8;
       border-radius: 3px;
     }
-
-    .role-icon-img{
+    .role-icon-img {
       width: 20px;
       height: 20px;
-      background: var(--lavender);
-      margin: 20px auto 20px;
-      font-size: 1.5rem;
+      object-fit: contain;
     }
 
-    .log-body::-webkit-scrollbar-thumb:hover { background: #B0B0B0; }
+    .output-files-panel {
+      background: var(--white);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 16px 20px;
+      margin-top: 16px;
+      flex-shrink: 0;
+      animation: fadeIn 0.3s ease;
+    }
+    .output-files-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .output-files-title {
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+    .output-files-count {
+      font-size: 0.75rem;
+      color: var(--slate);
+    }
+    .output-files-list {
+      display: flex;
+      flex-direction: column;
+    }
+    .output-file-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-top: 1px solid var(--lavender);
+      font-size: 0.82rem;
+    }
+    .output-file-name {
+      font-family: var(--font-mono);
+      color: var(--black);
+      word-break: break-all;
+    }
+    .output-file-size {
+      color: var(--slate);
+      font-size: 0.75rem;
+      margin-left: 12px;
+      white-space: nowrap;
+    }
+    .download-btn {
+      padding: 5px 14px;
+      background: var(--black);
+      color: var(--white);
+      border: none;
+      border-radius: var(--radius-sm);
+      font-size: 0.75rem;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: opacity 0.15s;
+      white-space: nowrap;
+    }
+    .download-btn:hover { opacity: 0.8; }
   </style>
 </head>
 <body>
 
-  
   <div class="titlebar">
     <div class="titlebar-left">
       <button class="back-btn" id="btn-back">← Back</button>
@@ -322,24 +356,28 @@
   </div>
 
   <div class="page">
-    
     <div class="upload-bar">
       <label class="file-label" id="file-picker-label">
-        <img class="role-icon-img" src="../public/folder.png" alt=""> Choose .py file
+        <img class="role-icon-img" src="../public/folder.png" alt=""> Script (.py)
         <input type="file" id="file-input" accept=".py" />
       </label>
       <span class="file-name" id="file-name">No file selected</span>
 
       <label class="file-label" id="req-picker-label">
-        <img class="role-icon-img" src="../public/file.png" alt=""> requirements.txt (optional)
+        <img class="role-icon-img" src="../public/file.png" alt=""> requirements.txt
         <input type="file" id="req-input" accept=".txt" />
       </label>
       <span class="file-name" id="req-name">No requirements</span>
 
+      <label class="file-label" id="dataset-picker-label">
+        <img class="role-icon-img" src="../public/database.png" alt=""> Dataset (optional)
+        <input type="file" id="dataset-input" />
+      </label>
+      <span class="file-name" id="dataset-name">No dataset</span>
+
       <button class="submit-btn" id="btn-submit" disabled>Submit Job</button>
     </div>
 
-    
     <label class="gpu-toggle-box">
       <input type="checkbox" class="gpu-toggle-checkbox" id="use-gpu-checkbox" />
       <div class="gpu-toggle-text">
@@ -348,7 +386,6 @@
       </div>
     </label>
 
-    
     <div class="log-panel">
       <div class="log-header">
         <span class="log-header-title">Output</span>
@@ -360,6 +397,14 @@
       <div class="log-body" id="log-body">
         <div class="log-placeholder" id="log-placeholder">Logs will appear here after you submit a job</div>
       </div>
+    </div>
+
+    <div class="output-files-panel" id="output-files-panel" style="display:none;">
+      <div class="output-files-header">
+        <span class="output-files-title">Output Files</span>
+        <span class="output-files-count" id="output-files-count"></span>
+      </div>
+      <div class="output-files-list" id="output-files-list"></div>
     </div>
   </div>
 

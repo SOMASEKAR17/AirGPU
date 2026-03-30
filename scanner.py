@@ -1,275 +1,217 @@
-"""
-Code Scanner — AST-based static analysis + pattern matching
-for submitted Python scripts before execution.
-"""
-
 import ast
 import re
 from typing import List, Dict
 
-
-BANNED_IMPORTS = [
-    "os.system",
-    "subprocess",
-    "socket",
-    "ftplib",
-    "telnetlib",
-    "paramiko",
-    "fabric",
-    "ctypes",
-    "pickle",
-    "shelve",
-    "multiprocessing",
-    "threading",
-    "shutil",
-    "pathlib",
-    "glob",
-    "importlib",
-    "pkgutil",
-    "pty",
-    "tty",
-    "termios",
-    "signal",
-    "mmap",
+DANGEROUS_CALL_PATTERNS = [
+    ("eval", "dynamic code evaluation via eval()"),
+    ("exec", "dynamic code execution via exec()"),
+    ("compile", "dynamic code compilation"),
+    ("__import__", "dynamic import — possible obfuscation"),
+    ("breakpoint", "debugger breakpoint — not allowed in submitted jobs"),
 ]
 
-
-BANNED_CALLS = [
-    "os.system",
-    "os.popen",
-    "os.spawn",
-    "os.exec",
-    "os.fork",
-    "os.kill",
-    "os.remove",
-    "os.unlink",
-    "os.rmdir",
-    "os.environ",
-    "os.getenv",
-    "builtins.eval",
-    "builtins.exec",
-    "builtins.compile",
-    "builtins.__import__",
+DANGEROUS_ATTRIBUTE_CALLS = [
+    ("os", "system", "shell command execution via os.system()"),
+    ("os", "popen", "shell pipe via os.popen()"),
+    ("os", "execv", "process replacement via os.execv()"),
+    ("os", "execve", "process replacement via os.execve()"),
+    ("os", "execvp", "process replacement via os.execvp()"),
+    ("os", "spawnl", "process spawning via os.spawnl()"),
+    ("os", "spawnle", "process spawning via os.spawnle()"),
+    ("os", "spawnv", "process spawning"),
+    ("os", "fork", "process forking — fork bomb risk"),
+    ("os", "forkpty", "process forking"),
+    ("os", "kill", "process kill signal"),
+    ("os", "killpg", "process group kill signal"),
+    ("subprocess", "call", "shell subprocess execution"),
+    ("subprocess", "run", "shell subprocess execution"),
+    ("subprocess", "Popen", "shell subprocess with Popen"),
+    ("subprocess", "check_output", "shell subprocess check_output"),
+    ("subprocess", "check_call", "shell subprocess check_call"),
+    ("subprocess", "getoutput", "shell subprocess getoutput"),
+    ("subprocess", "getstatusoutput", "shell subprocess getstatusoutput"),
+    ("ctypes", "CDLL", "loading native library via ctypes"),
+    ("ctypes", "cdll", "loading native library via ctypes"),
+    ("ctypes", "windll", "loading Windows DLL"),
+    ("socket", "connect", "raw network connection"),
+    ("socket", "bind", "raw socket bind"),
+    ("urllib", "urlopen", "outbound URL request"),
+    ("requests", "get", "outbound HTTP GET request"),
+    ("requests", "post", "outbound HTTP POST request"),
+    ("requests", "put", "outbound HTTP PUT request"),
+    ("requests", "delete", "outbound HTTP DELETE request"),
+    ("httpx", "get", "outbound HTTP request via httpx"),
+    ("httpx", "post", "outbound HTTP request via httpx"),
+    ("aiohttp", "get", "outbound HTTP request via aiohttp"),
 ]
 
-
-BANNED_BUILTINS = [
-    "eval",
-    "exec",
-    "compile",
-    "__import__",
-    "open",
-    "breakpoint",
+DANGEROUS_STRING_PATTERNS = [
+    (r"rm\s+-rf\s*/", "rm -rf shell command in string literal"),
+    (r"curl\s+https?://", "curl outbound request in string literal"),
+    (r"wget\s+https?://", "wget outbound request in string literal"),
+    (r"nc\s+-[a-z]*e", "netcat reverse shell pattern"),
+    (r"bash\s+-i\s+>&", "bash reverse shell pattern"),
+    (r"/etc/passwd", "reading /etc/passwd"),
+    (r"/etc/shadow", "reading /etc/shadow"),
+    (r"\.ssh/id_rsa", "reading SSH private key"),
+    (r"chmod\s+[0-9]+\s+/", "chmod on system path"),
+    (r"base64\s+-d", "base64 decode in shell string"),
+    (r"python\s+-c\s+['\"]", "embedded python -c execution"),
+    (r"xmrig|cryptominer|stratum\+tcp", "crypto mining reference"),
 ]
 
-
-BANNED_PATTERNS = [
-    (r"os\.environ", "accessing environment variables"),
-    (r"os\.system\s*\(", "shell command execution"),
-    (r"subprocess\.", "subprocess execution"),
-    (r"__import__\s*\(", "dynamic import"),
-    (r"eval\s*\(", "eval() call"),
-    (r"exec\s*\(", "exec() call"),
-    (r"open\s*\(.*['\"]w['\"]", "writing to filesystem"),
-    (r"open\s*\(.*['\"]a['\"]", "appending to filesystem"),
-    (r"base64\.b64decode", "base64 decoded payload"),
-    (r"chr\s*\(\s*\d+\s*\)\s*\+", "character code obfuscation"),
-    (r"\\x[0-9a-fA-F]{2}", "hex encoded obfuscation"),
-    (r"while\s+True.*os\.fork", "fork bomb pattern"),
-    (r"lambda.*lambda.*lambda", "deeply nested lambda obfuscation"),
-    (r"getattr\s*\(.*['\"]system['\"]", "getattr shell access"),
-    (r"globals\s*\(\s*\)", "globals() access"),
-    (r"locals\s*\(\s*\)", "locals() access"),
-    (r"vars\s*\(\s*\)", "vars() access"),
-    (r"\bsocket\b", "raw socket access"),
-    (r"requests\.get\s*\(.*http", "outbound HTTP request"),
-    (r"requests\.post\s*\(.*http", "outbound HTTP POST"),
-    (r"urllib\.request", "outbound URL request"),
-    (r"http\.client", "raw HTTP client"),
-    (r"cryptominer|xmrig|monero|bitcoin.*mine", "crypto mining keywords"),
+SUSPICIOUS_OPEN_PATHS = [
+    "/etc/", "/proc/", "/sys/", "/dev/", "/root/",
+    "~/.ssh", "/var/", "/usr/", "/bin/", "/sbin/",
 ]
-
-
-ALLOWED_IMPORTS = {
-    
-    "math", "cmath", "decimal", "fractions", "random", "statistics",
-    "numpy", "scipy", "sympy",
-    
-    "pandas", "csv", "json", "re", "string", "textwrap",
-    
-    "torch", "tensorflow", "keras", "sklearn", "sklearn.linear_model",
-    "sklearn.ensemble", "sklearn.metrics", "sklearn.preprocessing",
-    "sklearn.model_selection", "xgboost", "lightgbm", "transformers",
-    "datasets", "tokenizers", "accelerate", "diffusers",
-    
-    "matplotlib", "matplotlib.pyplot", "seaborn", "plotly",
-    
-    "time", "datetime", "itertools", "functools", "collections",
-    "typing", "dataclasses", "enum", "abc", "copy", "pprint",
-    "hashlib", "hmac", "uuid", "struct", "io", "sys",
-    
-    "PIL", "PIL.Image", "cv2", "imageio", "skimage",
-    
-    "nltk", "spacy", "gensim",
-    
-    "pathlib.Path",
-    
-    "pprint", "traceback", "logging", "warnings",
-}
-
 
 class ScanResult:
     def __init__(self):
         self.passed = True
         self.violations: List[Dict] = []
         self.warnings: List[Dict] = []
+        self.risk_score: int = 0
 
-    def add_violation(self, line: int, message: str, severity: str = "error"):
+    def add_violation(self, line: int, message: str, risk: int = 10):
         self.passed = False
-        self.violations.append({
-            "line": line,
-            "message": message,
-            "severity": severity
-        })
+        self.risk_score += risk
+        self.violations.append({"line": line, "message": message})
 
-    def add_warning(self, line: int, message: str):
-        self.warnings.append({
-            "line": line,
-            "message": message,
-            "severity": "warning"
-        })
+    def add_warning(self, line: int, message: str, risk: int = 3):
+        self.risk_score += risk
+        self.warnings.append({"line": line, "message": message})
 
+def _get_call_name(node: ast.Call):
+    if isinstance(node.func, ast.Name):
+        return node.func.id, None, node.func.id
+    if isinstance(node.func, ast.Attribute):
+        obj = None
+        if isinstance(node.func.value, ast.Name):
+            obj = node.func.value.id
+        return obj, node.func.attr, f"{obj}.{node.func.attr}"
+    return None, None, None
 
-def scan_imports(tree: ast.AST, result: ScanResult):
-    """Check all imports against allowed list and banned list."""
+def scan_dangerous_calls(tree: ast.AST, result: ScanResult):
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                module = alias.name.split(".")[0]
-                full_module = alias.name
-                if full_module in BANNED_IMPORTS or module in BANNED_IMPORTS:
-                    result.add_violation(
-                        node.lineno,
-                        f"Banned import: '{full_module}'"
-                    )
-                elif module not in ALLOWED_IMPORTS and full_module not in ALLOWED_IMPORTS:
-                    result.add_violation(
-                        node.lineno,
-                        f"Import not in allowlist: '{full_module}' — add it to requirements.txt and ensure it is a trusted package"
-                    )
+        if not isinstance(node, ast.Call):
+            continue
+        obj, attr, full = _get_call_name(node)
 
-        elif isinstance(node, ast.ImportFrom):
-            module = node.module or ""
-            base_module = module.split(".")[0]
-            if module in BANNED_IMPORTS or base_module in BANNED_IMPORTS:
-                result.add_violation(
-                    node.lineno,
-                    f"Banned import: 'from {module}'"
-                )
-            elif base_module not in ALLOWED_IMPORTS and module not in ALLOWED_IMPORTS:
-                result.add_violation(
-                    node.lineno,
-                    f"Import not in allowlist: 'from {module}' — ensure it is a trusted package"
-                )
+        if obj is None and attr is None and full:
+            for fname, desc in DANGEROUS_CALL_PATTERNS:
+                if full == fname:
+                    result.add_violation(node.lineno, f"Dangerous call: {desc}", risk=15)
 
+        if obj and attr:
+            for dobj, dattr, desc in DANGEROUS_ATTRIBUTE_CALLS:
+                if obj == dobj and attr == dattr:
+                    result.add_violation(node.lineno, f"Dangerous call: {desc}", risk=15)
 
-def scan_function_calls(tree: ast.AST, result: ScanResult):
-    """Check for banned built-in calls and dangerous attribute access."""
+def scan_open_calls(tree: ast.AST, result: ScanResult):
     for node in ast.walk(tree):
-        
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name):
-                if node.func.id in BANNED_BUILTINS:
-                    result.add_violation(
-                        node.lineno,
-                        f"Banned function call: '{node.func.id}()'"
-                    )
-            
-            elif isinstance(node.func, ast.Attribute):
-                call_str = f"{getattr(node.func.value, 'id', '')}."                           f"{node.func.attr}"
-                for banned in BANNED_CALLS:
-                    if call_str in banned or banned.endswith(node.func.attr):
+        if not isinstance(node, ast.Call):
+            continue
+        obj, attr, full = _get_call_name(node)
+        is_open = (full == "open") or (attr == "open")
+        if not is_open:
+            continue
+        if node.args:
+            first = node.args[0]
+            path_str = None
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                path_str = first.value
+            if path_str:
+                for bad_path in SUSPICIOUS_OPEN_PATHS:
+                    if path_str.startswith(bad_path):
                         result.add_violation(
                             node.lineno,
-                            f"Banned call: '{call_str}'"
+                            f"Reading from restricted system path: {path_str}",
+                            risk=20
                         )
+                if len(node.args) >= 2 or any(kw.arg == "mode" for kw in node.keywords):
+                    mode_val = None
+                    if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+                        mode_val = node.args[1].value
+                    for kw in node.keywords:
+                        if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                            mode_val = kw.value.value
+                    if mode_val and ("w" in str(mode_val) or "a" in str(mode_val)):
+                        if path_str and not path_str.startswith("/app"):
+                            result.add_warning(
+                                node.lineno,
+                                f"Writing to path outside /app: {path_str}"
+                            )
 
-
-def scan_patterns(code: str, result: ScanResult):
-    """Regex-based pattern scanning on raw source code."""
-    lines = code.splitlines()
-    for i, line in enumerate(lines, 1):
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            continue  
-        for pattern, description in BANNED_PATTERNS:
-            if re.search(pattern, line, re.IGNORECASE):
-                result.add_violation(
-                    i,
-                    f"Suspicious pattern detected: {description}"
-                )
-                break  
-
-
-def scan_complexity(tree: ast.AST, result: ScanResult):
-    """Warn about suspiciously complex or obfuscated structures."""
+def scan_string_literals(tree: ast.AST, result: ScanResult):
     for node in ast.walk(tree):
-        
-        if isinstance(node, ast.Lambda):
-            depth = sum(
-                1 for child in ast.walk(node)
-                if isinstance(child, ast.Lambda)
-            )
-            if depth > 2:
-                result.add_violation(
-                    node.lineno,
-                    "Deeply nested lambdas — possible obfuscation"
-                )
-        
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            for pattern, desc in DANGEROUS_STRING_PATTERNS:
+                if re.search(pattern, node.value, re.IGNORECASE):
+                    result.add_violation(
+                        node.lineno,
+                        f"Suspicious string literal: {desc}",
+                        risk=12
+                    )
 
+def scan_obfuscation(tree: ast.AST, result: ScanResult):
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            val = node.value
+            if len(val) > 200 and re.match(r'^[A-Za-z0-9+/=]+$', val.strip()):
+                result.add_warning(
+                    node.lineno,
+                    "Long base64-like string — possible encoded payload"
+                )
+            if len(val) > 100 and all(ord(c) > 127 for c in val[:20] if c.strip()):
+                result.add_warning(
+                    node.lineno,
+                    "Non-ASCII heavy string — possible obfuscated content"
+                )
+
+        if isinstance(node, ast.Lambda):
+            nested = sum(1 for child in ast.walk(node) if isinstance(child, ast.Lambda))
+            if nested > 3:
+                result.add_warning(node.lineno, "Deeply nested lambdas — possible obfuscation")
+
+def scan_environment_access(tree: ast.AST, result: ScanResult):
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        obj, attr, full = _get_call_name(node)
+        if (obj == "os" and attr == "environ") or full == "os.environ":
+            result.add_warning(node.lineno, "Reading environment variables — may access secrets")
+        if obj == "os" and attr == "getenv":
+            result.add_warning(node.lineno, "Reading environment variable via os.getenv()")
 
 def scan_code(code: str) -> ScanResult:
-    """
-    Main entry point. Runs all scan passes on submitted code.
-    Returns a ScanResult with passed=True if safe, False if violations found.
-    """
     result = ScanResult()
-
-    
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
-        result.add_violation(
-            e.lineno or 0,
-            f"Syntax error: {e.msg}"
-        )
+        result.add_violation(e.lineno or 0, f"Syntax error: {e.msg}", risk=5)
         return result
 
-    
-    scan_imports(tree, result)
-
-    
-    scan_function_calls(tree, result)
-
-    
-    scan_patterns(code, result)
-
-    
-    scan_complexity(tree, result)
+    scan_dangerous_calls(tree, result)
+    scan_open_calls(tree, result)
+    scan_string_literals(tree, result)
+    scan_obfuscation(tree, result)
+    scan_environment_access(tree, result)
 
     return result
 
-
 def format_scan_result(result: ScanResult) -> str:
-    """Format scan result as a human readable string for the submitter UI."""
+    if result.passed and not result.warnings:
+        return "✓ Code scan passed — no security issues found"
     if result.passed:
-        return "✓ Code scan passed — no security violations found"
-
-    lines = ["✗ Code scan failed — job rejected\n"]
+        lines = [f"⚠ Code scan passed with {len(result.warnings)} warning(s)\n"]
+        for w in result.warnings:
+            lines.append(f"  Line {w['line']}: {w['message']}")
+        return "\n".join(lines)
+    lines = [f"✗ Code scan failed — {len(result.violations)} violation(s) found\n"]
     for v in result.violations:
         lines.append(f"  Line {v['line']}: {v['message']}")
     if result.warnings:
-        lines.append("\nWarnings:")
+        lines.append(f"\nWarnings ({len(result.warnings)}):")
         for w in result.warnings:
             lines.append(f"  Line {w['line']}: {w['message']}")
     return "\n".join(lines)
