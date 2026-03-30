@@ -32,8 +32,18 @@ document.getElementById("btn-maximize").addEventListener("click", () => ipcRende
 document.getElementById("btn-close").addEventListener("click",    () => ipcRenderer.send("window-close"));
 document.getElementById("btn-back").addEventListener("click",     () => ipcRenderer.send("go-home"));
 
-const COORDINATOR_HTTP = "https://airgpu.onrender.com";
-const COORDINATOR_WS   = "wss://airgpu.onrender.com";
+let COORDINATOR_HTTP = "http://localhost:8000";
+let COORDINATOR_WS   = "ws://localhost:8000";
+
+(async () => {
+    try {
+        const base = await window.electronAPI.getCoordinatorBase();
+        if (base) {
+            COORDINATOR_HTTP = base;
+            COORDINATOR_WS = base.replace("http://", "ws://").replace("https://", "wss://");
+        }
+    } catch(e) {}
+})();
 
 let selectedFilePath = null;
 let selectedFileContents = null;

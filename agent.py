@@ -14,10 +14,13 @@ import urllib.error
 import psutil
 import websockets
 
-COORDINATOR_WS = os.environ.get(
-    "COORDINATOR_WS", "wss://airgpu.onrender.com/ws/contributor"
-)
-COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP", "https://airgpu.onrender.com")
+IS_PROD = os.environ.get("IS_PROD", "false").lower() == "true"
+if IS_PROD:
+    COORDINATOR_WS = os.environ.get("COORDINATOR_WS", "wss://airgpu.onrender.com/ws/contributor")
+    COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP", "https://airgpu.onrender.com")
+else:
+    COORDINATOR_WS = os.environ.get("COORDINATOR_WS", "ws://localhost:8000/ws/contributor")
+    COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP", "http://localhost:8000")
 
 NODE_ID = str(uuid.uuid4())
 
