@@ -604,10 +604,10 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
                         })
                     except Exception:
                         pass
-        except Exception:
-            best_conn.busy = False
-            best_conn.current_job = None
-            job.status = "pending"
+                except Exception:
+                    best_conn.busy = False
+                    best_conn.current_job = None
+                    job.status = "pending"
 
     if not assigned:
         pending_jobs.append(job_id)
@@ -621,11 +621,11 @@ async def try_assign_pending():
         job = jobs.get(job_id)
         if not job or job.done:
             continue
-        
+
         if not job.dataset_ready:
             new_pending.append(job_id)
             continue
-        
+
         available = [
             (cid, c) for cid, c in contributors.items()
             if not c.busy and (not job.use_gpu or c.has_gpu)
@@ -633,20 +633,18 @@ async def try_assign_pending():
         if not available:
             new_pending.append(job_id)
             continue
-        
+
         best_cid, best_conn = max(
             available,
             key=lambda x: score_contributor(x[1], job.use_gpu)
         )
-        
-    pending_jobs.extendleft(reversed(list(new_pending)))
-        
+
         best_conn.busy = True
         best_conn.current_job = job_id
         job.contributor_node_id = best_conn.node_id
         job.status = "running"
         job.current_contributor_start = time.time()
-        
+
         try:
             await best_conn.ws.send_json({
                 "type": "job",
@@ -659,7 +657,7 @@ async def try_assign_pending():
                 "dataset_filename": getattr(job, "dataset_filename", None),
                 "output_extensions": getattr(job, "output_extensions", [".pkl", ".pt", ".h5", ".csv", ".json", ".txt", ".png", ".jpg"]),
             })
-            
+
             if best_conn.node_id:
                 asyncio.create_task(db_job_started(
                     job_id,
@@ -691,8 +689,10 @@ async def try_assign_pending():
             best_conn.busy = False
             best_conn.current_job = None
             job.status = "pending"
-            pending_jobs.appendleft(job_id)
+            new_pending.appendleft(job_id)
             break
+
+    pending_jobs.extendleft(reversed(list(new_pending)))
 
 @app.post("/checkpoint/{job_id}")
 async def receive_checkpoint(job_id: str, request: Request):
