@@ -38,6 +38,63 @@ document.getElementById("btn-back").addEventListener("click",     () => ipcRende
 
 let isConnected = false;
 let currentJobId = null;
+let currentNodeId = null;
+const coordinatorUrl = "ws://10.212.87.185:8000/ws/contributor";
+
+setInterval(() => {
+    if (currentNodeId) fetchAndRenderHistory();
+}, 10000);
+
+async function fetchAndRenderHistory() {
+    const nodeId = currentNodeId;
+    if (!nodeId) return;
+
+    try {
+        const coordinatorHttp = coordinatorUrl.replace("ws://", "http://").replace("/ws/contributor", "");
+        const res = await fetch(`${coordinatorHttp}/contributor-history/${nodeId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        document.getElementById("history-count").textContent = `${data.total_jobs} job${data.total_jobs !== 1 ? "s" : ""} completed`;
+        document.getElementById("cpu-hours").textContent = `${data.total_cpu_hours}h`;
+        document.getElementById("gpu-hours").textContent = `${data.total_gpu_hours}h`;
+
+        const list = document.getElementById("history-list");
+
+        if (data.jobs.length === 0) {
+            list.innerHTML = `<div id="history-empty">No jobs completed yet \u2014 waiting for work...</div>`;
+            return;
+        }
+
+        list.innerHTML = "";
+        data.jobs.forEach((job, i) => {
+            const row = document.createElement("div");
+            row.className = "history-row";
+            row.style.animationDelay = `${i * 0.05}s`;
+
+            const gpuTag = job.used_gpu
+                ? `<span class="resource-tag gpu-tag">GPU \u00B7 ${job.gpu_name}</span>`
+                : `<span class="resource-tag">No GPU</span>`;
+
+            row.innerHTML = `
+                <div class="history-row-top">
+                    <span class="job-id">job #${job.job_id}</span>
+                    <span class="submitter-email">${job.submitter_email}</span>
+                    <span class="job-duration">${job.duration_seconds}s</span>
+                </div>
+                <div class="history-row-bottom">
+                    <span class="resource-tag">CPU \u00B7 ${job.cpu_cores} cores</span>
+                    <span class="resource-tag">RAM \u00B7 ${job.ram_gb}GB</span>
+                    ${gpuTag}
+                    <span class="resource-tag lines-tag">${job.script_lines} lines</span>
+                </div>
+            `;
+            list.appendChild(row);
+        });
+    } catch (e) {
+        console.error("history fetch failed:", e);
+    }
+}
 
 
 
@@ -62,7 +119,14 @@ function parseAgentLine(line) {
     setConnected(false);
   }
 
-  
+  if (line.includes("[agent] node_id =")) {
+    currentNodeId = line.split("node_id = ")[1]?.trim();
+  }
+
+  if (line.includes("job") && line.includes("complete")) {
+    setTimeout(fetchAndRenderHistory, 500);
+  }
+
   const nodeMatch = line.match(/node_id\s*=\s*([a-f0-9-]+)/i);
   if (nodeMatch) {
     nodeIdEl.textContent = nodeMatch[1];

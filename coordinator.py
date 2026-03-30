@@ -65,6 +65,8 @@ class ContributorConnection:
         self.gpu_vram_total_mb: int = 0
         self.gpu_utilization: int = 0
         self.max_gpu_vram_mb: int = 0
+        self.max_cpus: float = 2.0
+        self.max_ram_gb: int = 4
 
 class Job:
     def __init__(self, job_id: str, script: str, requirements: str = None, use_gpu: bool = False):
@@ -72,6 +74,7 @@ class Job:
         self.script = script
         self.requirements = requirements
         self.use_gpu = use_gpu
+        self.submitter_email: str = ""
         self.done = False
         self.status = "pending"
         self.contributor_node_id: Optional[str] = None
@@ -85,6 +88,20 @@ contributors: Dict[int, ContributorConnection] = {}
 jobs: Dict[str, Job] = {}
 submitter_connections: Dict[str, WebSocket] = {}
 pending_jobs: deque = deque()
+contributor_history: Dict[str, list] = {}
+
+def make_job_record(job_id, submitter_email, duration_seconds, cpu_cores, ram_gb, used_gpu, gpu_name, script_lines):
+    return {
+        "job_id": job_id[:8],
+        "submitter_email": submitter_email,
+        "duration_seconds": duration_seconds,
+        "cpu_cores": cpu_cores,
+        "ram_gb": ram_gb,
+        "used_gpu": used_gpu,
+        "gpu_name": gpu_name or "none",
+        "script_lines": script_lines,
+        "completed_at": time.time(),
+    }
 
 def score_contributor(conn, use_gpu: bool) -> float:
     if use_gpu:
@@ -99,6 +116,7 @@ class SubmitJobRequest(BaseModel):
     script: str
     requirements: Optional[str] = None
     use_gpu: bool = False
+    submitter_email: Optional[str] = ""
 
 @app.post("/submit-job")
 async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token)):
@@ -121,6 +139,7 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
 
     job_id = str(uuid.uuid4())
     job = Job(job_id=job_id, script=req.script, requirements=req.requirements, use_gpu=req.use_gpu)
+    job.submitter_email = req.submitter_email or "anonymous"
     jobs[job_id] = job
 
     assigned = False
@@ -316,6 +335,8 @@ async def ws_contributor(ws: WebSocket):
                 conn.gpu_vram_total_mb = msg.get("gpu_vram_total_mb", 0)
                 conn.gpu_utilization = msg.get("gpu_utilization", 0)
                 conn.max_gpu_vram_mb = msg.get("max_gpu_vram_mb", 0)
+                conn.max_cpus = msg.get("max_cpus", 2.0)
+                conn.max_ram_gb = msg.get("max_ram_gb", 4)
                 await try_assign_pending()
 
             elif msg_type == "log":
@@ -337,6 +358,20 @@ async def ws_contributor(ws: WebSocket):
                 if job_id in jobs:
                     jobs[job_id].done = True
                     jobs[job_id].status = "complete"
+                    duration = round(time.time() - jobs[job_id].submitted_at, 1)
+                    node_id = conn.node_id or str(id(conn))
+                    if node_id not in contributor_history:
+                        contributor_history[node_id] = []
+                    contributor_history[node_id].append(make_job_record(
+                        job_id=job_id,
+                        submitter_email=jobs[job_id].submitter_email,
+                        duration_seconds=duration,
+                        cpu_cores=conn.max_cpus if hasattr(conn, "max_cpus") else 2,
+                        ram_gb=conn.max_ram_gb if hasattr(conn, "max_ram_gb") else 4,
+                        used_gpu=jobs[job_id].use_gpu,
+                        gpu_name=conn.gpu_name,
+                        script_lines=len(jobs[job_id].script.splitlines()),
+                    ))
                 conn.busy = False
                 conn.current_job = None
                 sub_ws = submitter_connections.get(job_id)
@@ -460,6 +495,20 @@ async def queue_status():
             }
             for c in contributors.values()
         ]
+    }
+
+@app.get("/contributor-history/{node_id}")
+async def get_contributor_history(node_id: str):
+    history = contributor_history.get(node_id, [])
+    total_jobs = len(history)
+    total_cpu_hours = round(sum(r["cpu_cores"] * r["duration_seconds"] / 3600 for r in history), 2)
+    total_gpu_hours = round(sum(r["duration_seconds"] / 3600 for r in history if r["used_gpu"]), 2)
+    return {
+        "node_id": node_id,
+        "total_jobs": total_jobs,
+        "total_cpu_hours": total_cpu_hours,
+        "total_gpu_hours": total_gpu_hours,
+        "jobs": list(reversed(history)),
     }
 
 if __name__ == "__main__":

@@ -90,6 +90,8 @@ btnSubmit.addEventListener("click", async () => {
 
   try {
     const token = await window.electronAPI.getAuthToken();
+    const user = await window.electronAPI.getUser();
+    const submitterEmail = user?.email || "anonymous";
 
     const res = await fetch(`${COORDINATOR_HTTP}/submit-job`, {
       method: "POST",
@@ -100,7 +102,8 @@ btnSubmit.addEventListener("click", async () => {
       body: JSON.stringify({ 
         script: selectedFileContents,
         requirements: selectedReqContents,
-        use_gpu: useGpuCheckbox.checked
+        use_gpu: useGpuCheckbox.checked,
+        submitter_email: submitterEmail
       }),
     });
 
