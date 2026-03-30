@@ -1,34 +1,30 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import pandas as pd
-import pickle
 
-# load dataset
-df = pd.read_csv("dataset.csv")
-
-x = torch.tensor(df[['x']].values, dtype=torch.float32)
-y = torch.tensor(df[['y']].values, dtype=torch.float32)
+# dataset (y = 2x + 1 pattern with slight noise)
+x = torch.tensor([[1.0], [2.0], [3.0], [4.0], [5.0]])
+y = torch.tensor([[3.1], [5.0], [7.2], [9.1], [11.0]])
 
 # model
 class Model(nn.Module):
     def __init__(self):
         super().__init__()
-        self.linear = nn.Linear(1, 1)
+        self.linear_layer = nn.Linear(1, 1)
 
     def forward(self, x):
-        return self.linear(x)
+        return self.linear_layer(x)
 
 model = Model()
 
-# loss + optimizer
+# loss and optimizer
 loss_fn = nn.MSELoss()
 optimizer = optim.SGD(model.parameters(), lr=0.01)
 
 # training loop
 for epoch in range(500):
-    pred = model(x)
-    loss = loss_fn(pred, y)
+    predictions = model(x)
+    loss = loss_fn(predictions, y)
 
     optimizer.zero_grad()
     loss.backward()
@@ -37,8 +33,8 @@ for epoch in range(500):
     if epoch % 50 == 0:
         print(f"epoch {epoch}, loss {loss.item()}")
 
-# save model as pickle
-with open("model.pkl", "wb") as f:
-    pickle.dump(model.state_dict(), f)
+# testing
+test_input = torch.tensor([[6.0]])
+predicted_output = model(test_input)
 
-print("Model saved as model.pkl")
+print("\nPrediction for x=6:", predicted_output.item())
