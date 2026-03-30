@@ -1,2 +1,3 @@
-torch
-pandas
+torch==2.2.2
+pandas==2.2.2
+numpy<2
