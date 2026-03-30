@@ -1,11 +1,3 @@
-"""
-Contributor Agent — the Python sidecar process.
-
-Connects to the coordinator via WebSocket, sends heartbeats every 5 seconds,
-receives job assignments, executes scripts inside Docker containers, and
-streams stdout back to the coordinator line-by-line.
-"""
-
 import asyncio
 import json
 import os
@@ -16,13 +8,16 @@ import subprocess
 import platform
 import time
 import shutil
-
+import base64
+import urllib.request
+import urllib.error
 import psutil
 import websockets
 
 COORDINATOR_WS = os.environ.get(
     "COORDINATOR_WS", "ws://localhost:8000/ws/contributor"
 )
+COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP", "http://localhost:8000")
 
 NODE_ID = str(uuid.uuid4())
 
@@ -30,11 +25,9 @@ MAX_CPUS = float(os.environ.get("CONTRIB_MAX_CPUS", "2.0"))
 MAX_RAM_GB = int(os.environ.get("CONTRIB_MAX_RAM_GB", "4"))
 MAX_GPU_VRAM_MB = int(os.environ.get("CONTRIB_MAX_GPU_VRAM_MB", "0"))
 
-
 PREBAKED_GPU_PACKAGES = {"torch", "torchvision", "torchaudio"}
 
 def filter_requirements(requirements: str) -> str:
-    """Strip packages already pre-baked in the GPU image."""
     lines = []
     for line in requirements.splitlines():
         stripped = line.strip()
@@ -46,7 +39,6 @@ def filter_requirements(requirements: str) -> str:
     return "\n".join(lines)
 
 def detect_gpu():
-    """Returns GPU info dict if NVIDIA GPU available, else None."""
     if not shutil.which("nvidia-smi"):
         return None
     try:
@@ -74,10 +66,40 @@ GPU_INFO = detect_gpu()
 HAS_GPU = GPU_INFO is not None
 print(f"[agent] GPU detected: {GPU_INFO['name'] if HAS_GPU else 'None'}")
 
+def upload_checkpoint(job_id: str, epoch: int, filepath: str):
+    try:
+        with open(filepath, "rb") as f:
+            data = base64.b64encode(f.read()).decode("utf-8")
+        payload = json.dumps({
+            "epoch": epoch,
+            "checkpoint_data": data
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{COORDINATOR_HTTP}/checkpoint/{job_id}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        urllib.request.urlopen(req, timeout=30)
+        print(f"[agent] checkpoint uploaded: epoch {epoch}")
+    except Exception as e:
+        print(f"[agent] checkpoint upload failed: {e}")
 
+def download_checkpoint(job_id: str) -> tuple:
+    try:
+        req = urllib.request.Request(
+            f"{COORDINATOR_HTTP}/checkpoint/{job_id}",
+            method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+            if body.get("checkpoint"):
+                return body["checkpoint"], body.get("epoch", 0)
+    except Exception as e:
+        print(f"[agent] checkpoint download failed: {e}")
+    return None, 0
 
 async def send_heartbeats(ws):
-    """Send CPU/RAM stats every 5 seconds."""
     while True:
         cpu_percent = psutil.cpu_percent(interval=None)
         ram = psutil.virtual_memory()
@@ -105,22 +127,40 @@ async def send_heartbeats(ws):
             break
         await asyncio.sleep(5)
 
+async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gpu: bool = False, resume_from_epoch: int = 0, coordinator_url: str = None):
+    global COORDINATOR_HTTP
+    if coordinator_url:
+        COORDINATOR_HTTP = coordinator_url
 
-
-async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gpu: bool = False):
-    """Write script to temp file, run inside Docker, stream output."""
     tmpdir = tempfile.mkdtemp()
     script_path = os.path.join(tmpdir, "job.py")
+    checkpoint_path = os.path.join(tmpdir, "checkpoint.pt")
+
+    if resume_from_epoch > 0:
+        print(f"[agent] resuming job {job_id} from epoch {resume_from_epoch}")
+        checkpoint_data, saved_epoch = download_checkpoint(job_id)
+        if checkpoint_data:
+            with open(checkpoint_path, "wb") as f:
+                f.write(base64.b64decode(checkpoint_data))
+            print(f"[agent] checkpoint restored: epoch {saved_epoch}")
+            try:
+                await ws.send(json.dumps({
+                    "type": "log",
+                    "job_id": job_id,
+                    "line": f"[agent] resuming from checkpoint at epoch {saved_epoch}"
+                }))
+            except Exception:
+                pass
+        else:
+            print(f"[agent] no checkpoint found — starting from epoch 0")
 
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(script)
 
-  
     mount_path = tmpdir.replace("\\", "/")
     if platform.system() == "Windows" and mount_path[1] == ":":
         mount_path = "/" + mount_path[0].lower() + mount_path[2:]
 
-    
     if use_gpu and requirements:
         requirements = filter_requirements(requirements) or None
 
@@ -135,6 +175,10 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
         f"--memory={MAX_RAM_GB}g",
         f"--memory-swap={MAX_RAM_GB}g",
         "--pids-limit=100",
+        "-e", f"JOB_ID={job_id}",
+        "-e", f"RESUME_FROM_EPOCH={resume_from_epoch}",
+        "-e", f"COORDINATOR_HTTP={COORDINATOR_HTTP}",
+        "-e", f"CHECKPOINT_PATH=/app/checkpoint.pt"
     ]
 
     if use_gpu and HAS_GPU and MAX_GPU_VRAM_MB > 0:
@@ -149,37 +193,21 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
         base_image = "python:3.11-slim"
         use_gpu = False
 
-    if use_gpu:
-        if requirements:
-            cmd_str = "pip install -r /app/requirements.txt && python /app/job.py"
-            docker_cmd.extend([
-                "--network", "bridge",
-                "-v", f"{mount_path}:/app",
-                base_image,
-                "sh", "-c", cmd_str
-            ])
-        else:
-            docker_cmd.extend([
-                "--network", "none",
-                "-v", f"{mount_path}:/app",
-                base_image,
-                "python", "/app/job.py"
-            ])
+    if requirements:
+        cmd_str = "pip install -r /app/requirements.txt && python /app/job.py"
+        docker_cmd.extend([
+            "--network", "bridge",
+            "-v", f"{mount_path}:/app",
+            base_image,
+            "sh", "-c", cmd_str
+        ])
     else:
-        if requirements:
-            docker_cmd.extend([
-                "--network", "bridge",
-                "-v", f"{mount_path}:/app",
-                base_image,
-                "sh", "-c", "pip install -r /app/requirements.txt && python /app/job.py"
-            ])
-        else:
-            docker_cmd.extend([
-                "--network", "none",
-                "-v", f"{mount_path}:/app",
-                base_image,
-                "python", "/app/job.py"
-            ])
+        docker_cmd.extend([
+            "--network", "none",
+            "-v", f"{mount_path}:/app",
+            base_image,
+            "python", "/app/job.py"
+        ])
 
     print(f"[agent] running job {job_id}")
     print(f"[agent] cmd: {' '.join(docker_cmd)}")
@@ -220,6 +248,18 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
         if not line:
             break
         decoded = line.decode("utf-8", errors="replace").rstrip("\n").rstrip("\r")
+
+        if decoded.startswith("CHECKPOINT:"):
+            parts = decoded.split(":")
+            if len(parts) >= 3:
+                try:
+                    epoch = int(parts[1])
+                    ckpt_file = parts[2].strip()
+                    upload_checkpoint(job_id, epoch, os.path.join(tmpdir, os.path.basename(ckpt_file)))
+                except Exception as e:
+                    print(f"[agent] checkpoint parse error: {e}")
+            continue
+
         log_msg = {"type": "log", "job_id": job_id, "line": decoded}
         try:
             await ws.send(json.dumps(log_msg))
@@ -248,8 +288,6 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
 
     print(f"[agent] job {job_id} complete (exit code {proc.returncode})")
 
-
-
 async def main():
     print(f"[agent] node_id = {NODE_ID}")
     print(f"[agent] connecting to {COORDINATOR_WS}")
@@ -269,7 +307,9 @@ async def main():
                             script = msg["script"]
                             requirements = msg.get("requirements")
                             use_gpu = msg.get("use_gpu", False)
-                            await run_job(ws, job_id, script, requirements, use_gpu)
+                            resume_from_epoch = msg.get("resume_from_epoch", 0)
+                            coordinator_url = msg.get("coordinator_url")
+                            await run_job(ws, job_id, script, requirements, use_gpu, resume_from_epoch, coordinator_url)
                 except websockets.ConnectionClosed:
                     print("[agent] connection closed")
                 finally:
@@ -283,7 +323,6 @@ async def main():
             print(f"[agent] connection error: {exc}, retrying in 3s…")
 
         await asyncio.sleep(3)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

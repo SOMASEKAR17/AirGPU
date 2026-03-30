@@ -1,21 +1,19 @@
-"""
-Coordinator Server — the central message router.
-
-Runs on port 8000. Contributors connect via WebSocket to register as compute
-nodes. Submitters POST scripts and then connect via WebSocket to stream logs.
-"""
-
+import os
+import base64
 import uuid
 import json
 from typing import Dict, Optional
 from collections import deque
 import time
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from scanner import scan_code, format_scan_result
+
+CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), "checkpoints")
+os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 app = FastAPI()
 
@@ -25,7 +23,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 class ContributorConnection:
     def __init__(self, ws: WebSocket, node_id: Optional[str] = None):
@@ -42,7 +39,6 @@ class ContributorConnection:
         self.gpu_utilization: int = 0
         self.max_gpu_vram_mb: int = 0
 
-
 class Job:
     def __init__(self, job_id: str, script: str, requirements: str = None, use_gpu: bool = False):
         self.job_id = job_id
@@ -53,7 +49,10 @@ class Job:
         self.status = "pending"
         self.contributor_node_id: Optional[str] = None
         self.submitted_at = time.time()
-
+        self.checkpoint_epoch = 0
+        self.checkpoint_path = None
+        self.retry_count = 0
+        self.max_retries = 3
 
 contributors: Dict[int, ContributorConnection] = {}
 jobs: Dict[str, Job] = {}
@@ -69,17 +68,13 @@ def score_contributor(conn, use_gpu: bool) -> float:
         )
     return conn.cpu_free * 0.5 + conn.ram_free * 0.5
 
-
-
 class SubmitJobRequest(BaseModel):
     script: str
     requirements: Optional[str] = None
     use_gpu: bool = False
 
-
 @app.post("/submit-job")
 async def submit_job(req: SubmitJobRequest):
-    
     try:
         scan_result = scan_code(req.script)
         if not scan_result.passed:
@@ -96,7 +91,6 @@ async def submit_job(req: SubmitJobRequest):
     except Exception as exc:
         print(f"[coordinator] scanner error: {exc}")
 
-    
     job_id = str(uuid.uuid4())
     job = Job(job_id=job_id, script=req.script, requirements=req.requirements, use_gpu=req.use_gpu)
     jobs[job_id] = job
@@ -122,8 +116,21 @@ async def submit_job(req: SubmitJobRequest):
                 "script": job.script,
                 "requirements": job.requirements,
                 "use_gpu": job.use_gpu,
+                "resume_from_epoch": job.checkpoint_epoch,
+                "coordinator_url": f"http://0.0.0.0:8000",
             })
             assigned = True
+            
+            sub_ws = submitter_connections.get(job_id)
+            if sub_ws:
+                try:
+                    await sub_ws.send_json({
+                        "type": "log",
+                        "job_id": job_id,
+                        "line": "[coordinator] tip: print CHECKPOINT:<epoch>:<filename> in your script to save checkpoints"
+                    })
+                except Exception:
+                    pass
         except Exception:
             best_conn.busy = False
             best_conn.current_job = None
@@ -136,7 +143,6 @@ async def submit_job(req: SubmitJobRequest):
 
 async def try_assign_pending():
     while pending_jobs:
-        
         job_id = pending_jobs[0]
         job = jobs[job_id]
         
@@ -147,12 +153,10 @@ async def try_assign_pending():
         if not available:
             break  
         
-        
         best_cid, best_conn = max(
             available,
             key=lambda x: score_contributor(x[1], job.use_gpu)
         )
-        
         
         pending_jobs.popleft()
         
@@ -168,11 +172,18 @@ async def try_assign_pending():
                 "script": job.script,
                 "requirements": job.requirements,
                 "use_gpu": job.use_gpu,
+                "resume_from_epoch": job.checkpoint_epoch,
+                "coordinator_url": f"http://0.0.0.0:8000",
             })
             
             sub_ws = submitter_connections.get(job_id)
             if sub_ws:
                 try:
+                    await sub_ws.send_json({
+                        "type": "log",
+                        "job_id": job_id,
+                        "line": "[coordinator] tip: print CHECKPOINT:<epoch>:<filename> in your script to save checkpoints"
+                    })
                     await sub_ws.send_json({
                         "type": "status",
                         "job_id": job_id,
@@ -189,7 +200,61 @@ async def try_assign_pending():
             pending_jobs.appendleft(job_id)
             break
 
+@app.post("/checkpoint/{job_id}")
+async def receive_checkpoint(job_id: str, request: Request):
+    body = await request.json()
+    epoch = body.get("epoch", 0)
+    checkpoint_data = body.get("checkpoint_data")
 
+    if job_id not in jobs:
+        return {"error": "job not found"}
+
+    job = jobs[job_id]
+    checkpoint_filename = f"{job_id}_epoch_{epoch}.pt.b64"
+    checkpoint_path = os.path.join(CHECKPOINT_DIR, checkpoint_filename)
+
+    with open(checkpoint_path, "w") as f:
+        f.write(checkpoint_data)
+
+    if job.checkpoint_path and os.path.exists(job.checkpoint_path):
+        try:
+            os.remove(job.checkpoint_path)
+        except Exception:
+            pass
+
+    job.checkpoint_epoch = epoch
+    job.checkpoint_path = checkpoint_path
+    print(f"[coordinator] checkpoint saved for job {job_id} epoch {epoch}")
+
+    sub_ws = submitter_connections.get(job_id)
+    if sub_ws:
+        try:
+            await sub_ws.send_json({
+                "type": "checkpoint",
+                "job_id": job_id,
+                "epoch": epoch
+            })
+        except Exception:
+            pass
+
+    return {"saved": True, "epoch": epoch}
+
+@app.get("/checkpoint/{job_id}")
+async def get_checkpoint(job_id: str):
+    if job_id not in jobs:
+        return {"checkpoint": None}
+
+    job = jobs[job_id]
+    if not job.checkpoint_path or not os.path.exists(job.checkpoint_path):
+        return {"checkpoint": None, "epoch": 0}
+
+    with open(job.checkpoint_path, "r") as f:
+        checkpoint_data = f.read()
+
+    return {
+        "checkpoint": checkpoint_data,
+        "epoch": job.checkpoint_epoch
+    }
 
 @app.websocket("/ws/contributor")
 async def ws_contributor(ws: WebSocket):
@@ -254,31 +319,43 @@ async def ws_contributor(ws: WebSocket):
     except Exception as exc:    
         print(f"[coordinator] contributor error: {exc}")
     finally:
-        
         if conn.current_job:
             job = jobs.get(conn.current_job)
             if job and not job.done:
-                job.status = "pending"
-                job.contributor_node_id = None
-                pending_jobs.appendleft(conn.current_job)
-                print(f"[coordinator] contributor dropped mid-job — requeued {conn.current_job}")
-                
-                sub_ws = submitter_connections.get(conn.current_job)
-                if sub_ws:
-                    try:
-                        await sub_ws.send_json({
-                            "type": "status",
-                            "job_id": conn.current_job,
-                            "status": "pending",
-                            "queue_position": 1,
-                            "message": "Contributor disconnected — reassigning your job..."
-                        })
-                    except Exception:
-                        pass
+                job.retry_count += 1
+                if job.retry_count <= job.max_retries:
+                    job.status = "pending"
+                    job.contributor_node_id = None
+                    pending_jobs.appendleft(conn.current_job)
+                    print(f"[coordinator] contributor dropped — requeued job {conn.current_job} (retry {job.retry_count}/{job.max_retries})")
+                    sub_ws = submitter_connections.get(conn.current_job)
+                    if sub_ws:
+                        try:
+                            await sub_ws.send_json({
+                                "type": "status",
+                                "job_id": conn.current_job,
+                                "status": "pending",
+                                "queue_position": 1,
+                                "message": f"Contributor disconnected — reassigning job (attempt {job.retry_count}/{job.max_retries})...",
+                                "checkpoint_epoch": job.checkpoint_epoch
+                            })
+                        except Exception:
+                            pass
+                else:
+                    job.status = "failed"
+                    print(f"[coordinator] job {conn.current_job} failed after {job.max_retries} retries")
+                    sub_ws = submitter_connections.get(conn.current_job)
+                    if sub_ws:
+                        try:
+                            await sub_ws.send_json({
+                                "type": "failed",
+                                "job_id": conn.current_job,
+                                "message": f"Job failed after {job.max_retries} attempts — no contributors available"
+                            })
+                        except Exception:
+                            pass
         contributors.pop(cid, None)
         await try_assign_pending()
-
-
 
 def get_queue_position(job_id: str) -> int:
     queue_list = list(pending_jobs)
@@ -316,6 +393,15 @@ async def queue_status():
     return {
         "pending_jobs": list(pending_jobs),
         "total_jobs": len(jobs),
+        "jobs": [
+            {
+                "job_id": j.job_id,
+                "status": j.status,
+                "retry_count": j.retry_count,
+                "checkpoint_epoch": j.checkpoint_epoch,
+            }
+            for j in jobs.values()
+        ],
         "contributors": [
             {
                 "node_id": c.node_id,
