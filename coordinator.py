@@ -604,10 +604,10 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
                         })
                     except Exception:
                         pass
-                except Exception:
-                    best_conn.busy = False
-                    best_conn.current_job = None
-                    job.status = "pending"
+            except Exception:
+                best_conn.busy = False
+                best_conn.current_job = None
+                job.status = "pending"
 
     if not assigned:
         pending_jobs.append(job_id)
