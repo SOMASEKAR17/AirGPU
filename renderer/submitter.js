@@ -152,9 +152,16 @@ function connectSubmitterWS(jobId) {
 
     if (msg.type === "log") {
       appendLogLine(msg.line);
+    } else if (msg.type === "checkpoint") {
+      appendLogLine(`✓ Checkpoint saved — epoch ${msg.epoch}`);
+    } else if (msg.type === "failed") {
+      setStatus("error", "Error");
+      appendLogLine(`✗ ${msg.message}`);
+      btnSubmit.disabled = false;
     } else if (msg.type === "status") {
-      if (msg.status === "pending" && msg.message) {
-        
+      if (msg.checkpoint_epoch > 0) {
+        appendLogLine(`↺ ${msg.message} (will resume from epoch ${msg.checkpoint_epoch})`);
+      } else if (msg.status === "pending" && msg.message) {
         appendLogLine(`⚠ ${msg.message}`);
         setStatus("queued", "Queued");
       } else if (msg.status === "pending") {
