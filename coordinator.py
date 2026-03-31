@@ -836,11 +836,11 @@ async def list_outputs(job_id: str):
         })
     return {"files": files}
 
-@app.get("/datasets/{filename}")
-async def serve_dataset(filename: str):
+@app.get("/datasets/{job_id}/{filename}")
+async def serve_dataset(job_id: str, filename: str):
     from fastapi.responses import FileResponse
     safe_filename = os.path.basename(filename)
-    dataset_path = os.path.join(DATASETS_DIR, safe_filename)
+    dataset_path = os.path.join(DATASETS_DIR, f"{job_id}_{safe_filename}")
     if not os.path.exists(dataset_path):
         raise HTTPException(status_code=404, detail="Dataset not found")
     return FileResponse(dataset_path)
