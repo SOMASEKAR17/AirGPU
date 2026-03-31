@@ -7,11 +7,15 @@ from torch.utils.data import DataLoader, TensorDataset
 import urllib.request
 import os
 
-df = pd.read_csv("dataset.csv")
-
-
-X = df.iloc[:, :-1].values
-y = df.iloc[:, -1].values
+if os.path.exists("dataset.csv"):
+    df = pd.read_csv("dataset.csv")
+    X = df.iloc[:, :-1].values
+    y = df.iloc[:, -1].values
+else:
+    print("Warning: dataset.csv not found. Using synthetic data for demonstration.")
+    import numpy as np
+    X = np.random.randint(0, 255, (640, 784)).astype(np.float32)
+    y = np.random.randint(0, 10, (640,)).astype(np.int64)
 
 
 X = torch.tensor(X, dtype=torch.float32)

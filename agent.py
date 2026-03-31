@@ -113,7 +113,7 @@ def download_dataset(job_id: str, filename: str, dest_dir: str) -> str:
         print(f"[agent] dataset downloaded: {filename}")
         return dest_path
     except Exception as e:
-        print(f"[agent] dataset download failed: {e}")
+        print(f"[agent] ERROR: dataset download failed: {url} -> {e}")
         return None
 
 def upload_output_file(job_id: str, filepath: str):
@@ -268,8 +268,9 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
         base_image = "python:3.11-slim"
         use_gpu = False
 
+    cmd_diagnostic = "ls -R /app && "
     if requirements:
-        cmd_str = "pip install -r /app/requirements.txt && python /app/job.py"
+        cmd_str = f"{cmd_diagnostic}pip install -r /app/requirements.txt && python /app/job.py"
         docker_cmd.extend([
             "--network", "bridge",
             "-v", f"{mount_path}:/app",
@@ -277,11 +278,12 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
             "sh", "-c", cmd_str
         ])
     else:
+        cmd_str = f"{cmd_diagnostic}python /app/job.py"
         docker_cmd.extend([
-            "--network", "none",
+            "--network", "bridge",
             "-v", f"{mount_path}:/app",
             base_image,
-            "python", "/app/job.py"
+            "sh", "-c", cmd_str
         ])
 
     print(f"[agent] running job {job_id}")
