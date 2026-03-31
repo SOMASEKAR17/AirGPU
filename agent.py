@@ -104,7 +104,7 @@ def download_checkpoint(job_id: str) -> tuple:
 
 def download_dataset(job_id: str, filename: str, dest_dir: str) -> str:
     try:
-        url = f"{COORDINATOR_HTTP}/datasets/{job_id}_{filename}"
+        url = f"{COORDINATOR_HTTP}/datasets/{job_id}/{filename}"
         req = urllib.request.Request(url, method="GET")
         dest_path = os.path.join(dest_dir, filename)
         with urllib.request.urlopen(req, timeout=60) as resp:

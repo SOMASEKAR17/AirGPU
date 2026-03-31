@@ -7,9 +7,6 @@ from torch.utils.data import DataLoader, TensorDataset
 import urllib.request
 import os
 
-coordinator = os.environ.get("COORDINATOR_HTTP", "http://localhost:8000")
-urllib.request.urlretrieve(f"{coordinator}/datasets/dataset.csv", "dataset.csv")
-
 df = pd.read_csv("dataset.csv")
 
 
