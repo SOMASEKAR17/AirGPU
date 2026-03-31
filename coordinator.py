@@ -792,11 +792,20 @@ async def upload_output(job_id: str, request: Request):
     job_output_dir = os.path.join(OUTPUTS_DIR, job_id)
     os.makedirs(job_output_dir, exist_ok=True)
     output_path = os.path.join(job_output_dir, safe_filename)
-
     try:
+        raw_bytes = base64.b64decode(data_b64)
         with open(output_path, "wb") as f:
-            f.write(base64.b64decode(data_b64))
-        print(f"[coordinator] output saved: {output_path}")
+            f.write(raw_bytes)
+
+        # Also store in Firebase so it survives ephemeral disk resets
+        def _store_in_firebase():
+            firebase_db.reference(f"/outputs/{job_id}/{safe_filename}").set({
+                "filename": safe_filename,
+                "size_bytes": len(raw_bytes),
+                "data_b64": data_b64,
+                "uploaded_at": time.time()
+            })
+        asyncio.create_task(asyncio.to_thread(_store_in_firebase))
 
         sub_ws = submitter_connections.get(job_id)
         if sub_ws:
@@ -816,26 +825,57 @@ async def upload_output(job_id: str, request: Request):
 
 @app.get("/download-output/{job_id}/{filename}")
 async def download_output(job_id: str, filename: str):
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, Response
     safe_filename = os.path.basename(filename)
     output_path = os.path.join(OUTPUTS_DIR, job_id, safe_filename)
-    if not os.path.exists(output_path):
-        raise HTTPException(status_code=404, detail="Output file not found")
-    return FileResponse(output_path, filename=safe_filename)
+
+    if os.path.exists(output_path):
+        return FileResponse(output_path, filename=safe_filename)
+
+    def _read():
+        return firebase_db.reference(f"/outputs/{job_id}/{safe_filename}").get()
+    try:
+        fb_data = await asyncio.to_thread(_read)
+        if fb_data and fb_data.get("data_b64"):
+            raw = base64.b64decode(fb_data["data_b64"])
+            return Response(
+                content=raw,
+                media_type="application/octet-stream",
+                headers={"Content-Disposition": f"attachment; filename={safe_filename}"}
+            )
+    except Exception:
+        pass
+
+    raise HTTPException(status_code=404, detail="Output file not found")
 
 @app.get("/list-outputs/{job_id}")
 async def list_outputs(job_id: str):
-    job_output_dir = os.path.join(OUTPUTS_DIR, job_id)
-    if not os.path.exists(job_output_dir):
-        return {"files": []}
     files = []
-    for fname in os.listdir(job_output_dir):
-        fpath = os.path.join(job_output_dir, fname)
-        files.append({
-            "filename": fname,
-            "size_bytes": os.path.getsize(fpath),
-            "download_url": f"/download-output/{job_id}/{fname}"
-        })
+    job_output_dir = os.path.join(OUTPUTS_DIR, job_id)
+    if os.path.exists(job_output_dir):
+        for fname in os.listdir(job_output_dir):
+            fpath = os.path.join(job_output_dir, fname)
+            files.append({
+                "filename": fname,
+                "size_bytes": os.path.getsize(fpath),
+                "download_url": f"/download-output/{job_id}/{fname}"
+            })
+
+    if not files:
+        def _read():
+            return firebase_db.reference(f"/outputs/{job_id}").get()
+        try:
+            fb_data = await asyncio.to_thread(_read)
+            if fb_data:
+                for fname, finfo in fb_data.items():
+                    files.append({
+                        "filename": finfo["filename"],
+                        "size_bytes": finfo["size_bytes"],
+                        "download_url": f"/download-output/{job_id}/{finfo['filename']}"
+                    })
+        except Exception:
+            pass
+
     return {"files": files}
 
 @app.get("/datasets/{job_id}/{filename}")

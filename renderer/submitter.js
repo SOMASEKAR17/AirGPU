@@ -300,7 +300,7 @@ async function connectSubmitterWS(jobId) {
       logBody.scrollTop = logBody.scrollHeight;
       btnSubmit.disabled = false;
       refreshCreditBalance();
-      await fetchAndDisplayOutputFiles(jobId);
+      setTimeout(() => fetchAndDisplayOutputFiles(jobId), 2000);
       ws.close();
     }
   };
