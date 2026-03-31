@@ -18,7 +18,7 @@ from firebase_admin import credentials, auth as firebase_auth, db as firebase_db
 from scanner import scan_code, format_scan_result
 
 COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP")
-if not COORDINATOR_HTTP:
+if not COORDINATOR_HTTP or "your-app-name" in COORDINATOR_HTTP:
     if os.environ.get("RENDER"):
         COORDINATOR_HTTP = "https://airgpu.onrender.com"
     else:

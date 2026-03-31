@@ -15,12 +15,19 @@ import psutil
 import websockets
 
 IS_PROD = os.environ.get("IS_PROD", "false").lower() == "true"
-if IS_PROD:
-    COORDINATOR_WS = os.environ.get("COORDINATOR_WS", "wss://airgpu.onrender.com/ws/contributor")
-    COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP", "https://airgpu.onrender.com")
-else:
-    COORDINATOR_WS = os.environ.get("COORDINATOR_WS", "ws://localhost:8000/ws/contributor")
-    COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP", "http://localhost:8000")
+COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP")
+if not COORDINATOR_HTTP or "your-app-name" in COORDINATOR_HTTP:
+    if IS_PROD or (os.environ.get("RENDER") and not COORDINATOR_HTTP):
+        COORDINATOR_HTTP = "https://airgpu.onrender.com"
+    else:
+        COORDINATOR_HTTP = "http://localhost:8000"
+
+COORDINATOR_WS = os.environ.get("COORDINATOR_WS")
+if not COORDINATOR_WS or "your-app-name" in COORDINATOR_WS:
+    if IS_PROD or (os.environ.get("RENDER") and not COORDINATOR_WS):
+        COORDINATOR_WS = "wss://airgpu.onrender.com/ws/contributor"
+    else:
+        COORDINATOR_WS = "ws://localhost:8000/ws/contributor"
 
 NODE_ID = str(uuid.uuid4())
 
