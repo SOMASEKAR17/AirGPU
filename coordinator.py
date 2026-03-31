@@ -761,7 +761,9 @@ async def upload_dataset(request: Request, user=Depends(optional_verify_token)):
         return {"error": "missing data or job_id"}
 
     safe_filename = os.path.basename(filename)
-    dataset_path = os.path.join(DATASETS_DIR, f"{job_id}_{safe_filename}")
+    job_datasets_dir = os.path.join(DATASETS_DIR, job_id)
+    os.makedirs(job_datasets_dir, exist_ok=True)
+    dataset_path = os.path.join(job_datasets_dir, safe_filename)
 
     try:
         with open(dataset_path, "wb") as f:
@@ -840,7 +842,7 @@ async def list_outputs(job_id: str):
 async def serve_dataset(job_id: str, filename: str):
     from fastapi.responses import FileResponse
     safe_filename = os.path.basename(filename)
-    dataset_path = os.path.join(DATASETS_DIR, f"{job_id}_{safe_filename}")
+    dataset_path = os.path.join(DATASETS_DIR, job_id, safe_filename)
     if not os.path.exists(dataset_path):
         raise HTTPException(status_code=404, detail="Dataset not found")
     return FileResponse(dataset_path)
