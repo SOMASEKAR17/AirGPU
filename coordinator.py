@@ -15,6 +15,10 @@ from pydantic import BaseModel
 import firebase_admin
 from firebase_admin import credentials, auth as firebase_auth, db as firebase_db
 
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
+
 from scanner import scan_code, format_scan_result
 
 COORDINATOR_HTTP = os.environ.get("COORDINATOR_HTTP")
@@ -52,6 +56,63 @@ else:
     firebase_admin.initialize_app()
     AUTH_ENABLED = False
     print("[coordinator] Firebase auth disabled — serviceAccount.json or environment variable not found")
+
+CLOUDINARY_CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME")
+CLOUDINARY_API_KEY = os.environ.get("CLOUDINARY_API_KEY")
+CLOUDINARY_API_SECRET = os.environ.get("CLOUDINARY_API_SECRET")
+CLOUDINARY_ENABLED = all([CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET])
+
+if CLOUDINARY_ENABLED:
+    cloudinary.config(
+        cloud_name=CLOUDINARY_CLOUD_NAME,
+        api_key=CLOUDINARY_API_KEY,
+        api_secret=CLOUDINARY_API_SECRET,
+        secure=True
+    )
+    print("[coordinator] Cloudinary storage enabled")
+else:
+    print("[coordinator] Cloudinary not configured — file storage disabled")
+
+async def cloudinary_upload(data_b64: str, public_id: str, folder: str) -> dict:
+    def _upload():
+        raw_bytes = base64.b64decode(data_b64)
+        result = cloudinary.uploader.upload(
+            raw_bytes,
+            public_id=public_id,
+            folder=folder,
+            resource_type="raw",
+            overwrite=True,
+        )
+        return result
+    try:
+        return await asyncio.to_thread(_upload)
+    except Exception as e:
+        print(f"[cloudinary] upload failed: {e}")
+        return None
+
+async def cloudinary_get_url(public_id: str, folder: str) -> str:
+    try:
+        full_id = f"{folder}/{public_id}"
+        url = cloudinary.utils.cloudinary_url(full_id, resource_type="raw")[0]
+        return url
+    except Exception as e:
+        print(f"[cloudinary] get_url failed: {e}")
+        return None
+
+async def cloudinary_list_files(folder: str) -> list:
+    def _list():
+        result = cloudinary.api.resources(
+            type="upload",
+            resource_type="raw",
+            prefix=folder,
+            max_results=50
+        )
+        return result.get("resources", [])
+    try:
+        return await asyncio.to_thread(_list)
+    except Exception as e:
+        print(f"[cloudinary] list failed: {e}")
+        return []
 
 async def optional_verify_token(credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer(auto_error=False))):
     if not AUTH_ENABLED:
@@ -120,8 +181,8 @@ class Job:
         self.estimated_cost = 1.0
         self.contributions = []
         self.current_contributor_start = None
-        self.dataset_filename = None
         self.output_extensions = []
+        self.dataset_cloudinary_url = None
 
 contributors: Dict[int, ContributorConnection] = {}
 jobs: Dict[str, Job] = {}
@@ -585,6 +646,7 @@ async def submit_job(req: SubmitJobRequest, user=Depends(optional_verify_token))
                     "resume_from_epoch": job.checkpoint_epoch,
                     "coordinator_url": COORDINATOR_HTTP,
                     "dataset_filename": getattr(job, "dataset_filename", None),
+                    "dataset_url": getattr(job, "dataset_cloudinary_url", None),
                     "output_extensions": getattr(job, "output_extensions", [".pkl", ".pt", ".h5", ".csv", ".json", ".txt", ".png", ".jpg"]),
                 })
                 assigned = True
@@ -660,6 +722,7 @@ async def try_assign_pending():
                 "resume_from_epoch": job.checkpoint_epoch,
                 "coordinator_url": COORDINATOR_HTTP,
                 "dataset_filename": getattr(job, "dataset_filename", None),
+                "dataset_url": getattr(job, "dataset_cloudinary_url", None),
                 "output_extensions": getattr(job, "output_extensions", [".pkl", ".pt", ".h5", ".csv", ".json", ".txt", ".png", ".jpg"]),
             })
 
@@ -766,23 +829,68 @@ async def upload_dataset(request: Request, user=Depends(optional_verify_token)):
         return {"error": "missing data or job_id"}
 
     safe_filename = os.path.basename(filename)
-    job_datasets_dir = os.path.join(DATASETS_DIR, job_id)
-    os.makedirs(job_datasets_dir, exist_ok=True)
-    dataset_path = os.path.join(job_datasets_dir, safe_filename)
 
-    try:
-        with open(dataset_path, "wb") as f:
-            f.write(base64.b64decode(data_b64))
-        print(f"[coordinator] dataset saved: {dataset_path}")
-        
+    if CLOUDINARY_ENABLED:
+        public_id = f"{job_id}_{safe_filename}"
+        result = await cloudinary_upload(data_b64, public_id, f"compound/datasets/{job_id}")
+        if not result:
+            return {"error": "cloudinary upload failed"}
+
+        url = result.get("secure_url")
+        print(f"[coordinator] dataset uploaded to cloudinary: {url}")
+
+        def _store_meta():
+            firebase_db.reference(f"/datasets/{job_id}/{safe_filename}").set({
+                "filename": safe_filename,
+                "cloudinary_url": url,
+                "cloudinary_public_id": result.get("public_id"),
+                "uploaded_at": time.time()
+            })
+        asyncio.create_task(asyncio.to_thread(_store_meta))
+
         job = jobs.get(job_id)
         if job:
             job.dataset_ready = True
+            job.dataset_cloudinary_url = url
             asyncio.create_task(try_assign_pending())
-            
-        return {"saved": True, "filename": safe_filename, "path": dataset_path}
-    except Exception as e:
-        return {"error": str(e)}
+
+        return {"saved": True, "filename": safe_filename, "url": url}
+    else:
+        safe_filename = os.path.basename(filename)
+        job_datasets_dir = os.path.join(DATASETS_DIR, job_id)
+        os.makedirs(job_datasets_dir, exist_ok=True)
+        dataset_path = os.path.join(job_datasets_dir, safe_filename)
+        try:
+            with open(dataset_path, "wb") as f:
+                f.write(base64.b64decode(data_b64))
+            job = jobs.get(job_id)
+            if job:
+                job.dataset_ready = True
+                asyncio.create_task(try_assign_pending())
+            return {"saved": True, "filename": safe_filename}
+        except Exception as e:
+            return {"error": str(e)}
+
+@app.get("/datasets/{job_id}/{filename}")
+async def serve_dataset(job_id: str, filename: str):
+    from fastapi.responses import RedirectResponse, FileResponse
+    safe_filename = os.path.basename(filename)
+
+    if CLOUDINARY_ENABLED:
+        def _read():
+            return firebase_db.reference(f"/datasets/{job_id}/{safe_filename}").get()
+        try:
+            meta = await asyncio.to_thread(_read)
+            if meta and meta.get("cloudinary_url"):
+                return RedirectResponse(url=meta["cloudinary_url"])
+        except Exception:
+            pass
+        return HTTPException(status_code=404, detail="Dataset not found")
+
+    dataset_path = os.path.join(DATASETS_DIR, job_id, safe_filename)
+    if not os.path.exists(dataset_path):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return FileResponse(dataset_path)
 
 @app.post("/upload-output/{job_id}")
 async def upload_output(job_id: str, request: Request):
@@ -794,23 +902,27 @@ async def upload_output(job_id: str, request: Request):
         return {"error": "missing data"}
 
     safe_filename = os.path.basename(filename)
-    job_output_dir = os.path.join(OUTPUTS_DIR, job_id)
-    os.makedirs(job_output_dir, exist_ok=True)
-    output_path = os.path.join(job_output_dir, safe_filename)
-    try:
-        raw_bytes = base64.b64decode(data_b64)
-        with open(output_path, "wb") as f:
-            f.write(raw_bytes)
 
-        # Also store in Firebase so it survives ephemeral disk resets
-        def _store_in_firebase():
+    if CLOUDINARY_ENABLED:
+        public_id = f"{job_id}_{safe_filename}"
+        result = await cloudinary_upload(data_b64, public_id, f"compound/outputs/{job_id}")
+        if not result:
+            return {"error": "cloudinary upload failed"}
+
+        url = result.get("secure_url")
+        size_bytes = len(base64.b64decode(data_b64))
+        print(f"[coordinator] output uploaded to cloudinary: {url}")
+
+        def _store_meta():
             firebase_db.reference(f"/outputs/{job_id}/{safe_filename}").set({
                 "filename": safe_filename,
-                "size_bytes": len(raw_bytes),
-                "data_b64": data_b64,
-                "uploaded_at": time.time()
+                "size_bytes": size_bytes,
+                "cloudinary_url": url,
+                "cloudinary_public_id": result.get("public_id"),
+                "uploaded_at": time.time(),
+                "download_url": f"/download-output/{job_id}/{safe_filename}"
             })
-        asyncio.create_task(asyncio.to_thread(_store_in_firebase))
+        asyncio.create_task(asyncio.to_thread(_store_meta))
 
         sub_ws = submitter_connections.get(job_id)
         if sub_ws:
@@ -824,37 +936,72 @@ async def upload_output(job_id: str, request: Request):
             except Exception:
                 pass
 
-        return {"saved": True, "filename": safe_filename}
-    except Exception as e:
-        return {"error": str(e)}
+        return {"saved": True, "filename": safe_filename, "url": url}
+    else:
+        job_output_dir = os.path.join(OUTPUTS_DIR, job_id)
+        os.makedirs(job_output_dir, exist_ok=True)
+        output_path = os.path.join(job_output_dir, safe_filename)
+        try:
+            raw_bytes = base64.b64decode(data_b64)
+            with open(output_path, "wb") as f:
+                f.write(raw_bytes)
+            sub_ws = submitter_connections.get(job_id)
+            if sub_ws:
+                try:
+                    await sub_ws.send_json({
+                        "type": "output_file",
+                        "job_id": job_id,
+                        "filename": safe_filename,
+                        "download_url": f"/download-output/{job_id}/{safe_filename}"
+                    })
+                except Exception:
+                    pass
+            return {"saved": True, "filename": safe_filename}
+        except Exception as e:
+            return {"error": str(e)}
 
 @app.get("/download-output/{job_id}/{filename}")
 async def download_output(job_id: str, filename: str):
-    from fastapi.responses import FileResponse, Response
+    from fastapi.responses import RedirectResponse, FileResponse, Response
     safe_filename = os.path.basename(filename)
-    output_path = os.path.join(OUTPUTS_DIR, job_id, safe_filename)
 
+    if CLOUDINARY_ENABLED:
+        def _read():
+            return firebase_db.reference(f"/outputs/{job_id}/{safe_filename}").get()
+        try:
+            meta = await asyncio.to_thread(_read)
+            if meta and meta.get("cloudinary_url"):
+                return RedirectResponse(url=meta["cloudinary_url"])
+        except Exception:
+            pass
+        raise HTTPException(status_code=404, detail="Output file not found")
+
+    output_path = os.path.join(OUTPUTS_DIR, job_id, safe_filename)
     if os.path.exists(output_path):
         return FileResponse(output_path, filename=safe_filename)
-
-    def _read():
-        return firebase_db.reference(f"/outputs/{job_id}/{safe_filename}").get()
-    try:
-        fb_data = await asyncio.to_thread(_read)
-        if fb_data and fb_data.get("data_b64"):
-            raw = base64.b64decode(fb_data["data_b64"])
-            return Response(
-                content=raw,
-                media_type="application/octet-stream",
-                headers={"Content-Disposition": f"attachment; filename={safe_filename}"}
-            )
-    except Exception:
-        pass
-
     raise HTTPException(status_code=404, detail="Output file not found")
 
 @app.get("/list-outputs/{job_id}")
 async def list_outputs(job_id: str):
+    if CLOUDINARY_ENABLED:
+        def _read():
+            return firebase_db.reference(f"/outputs/{job_id}").get()
+        try:
+            fb_data = await asyncio.to_thread(_read)
+            if fb_data:
+                files = [
+                    {
+                        "filename": v["filename"],
+                        "size_bytes": v.get("size_bytes", 0),
+                        "download_url": v.get("download_url", f"/download-output/{job_id}/{v['filename']}")
+                    }
+                    for v in fb_data.values()
+                ]
+                return {"files": files}
+        except Exception:
+            pass
+        return {"files": []}
+
     files = []
     job_output_dir = os.path.join(OUTPUTS_DIR, job_id)
     if os.path.exists(job_output_dir):
@@ -865,32 +1012,7 @@ async def list_outputs(job_id: str):
                 "size_bytes": os.path.getsize(fpath),
                 "download_url": f"/download-output/{job_id}/{fname}"
             })
-
-    if not files:
-        def _read():
-            return firebase_db.reference(f"/outputs/{job_id}").get()
-        try:
-            fb_data = await asyncio.to_thread(_read)
-            if fb_data:
-                for fname, finfo in fb_data.items():
-                    files.append({
-                        "filename": finfo["filename"],
-                        "size_bytes": finfo["size_bytes"],
-                        "download_url": f"/download-output/{job_id}/{finfo['filename']}"
-                    })
-        except Exception:
-            pass
-
     return {"files": files}
-
-@app.get("/datasets/{job_id}/{filename}")
-async def serve_dataset(job_id: str, filename: str):
-    from fastapi.responses import FileResponse
-    safe_filename = os.path.basename(filename)
-    dataset_path = os.path.join(DATASETS_DIR, job_id, safe_filename)
-    if not os.path.exists(dataset_path):
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    return FileResponse(dataset_path)
 
 @app.websocket("/ws/contributor")
 async def ws_contributor(ws: WebSocket):

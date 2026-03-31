@@ -114,13 +114,13 @@ def download_dataset(job_id: str, filename: str, dest_dir: str) -> str:
         url = f"{COORDINATOR_HTTP}/datasets/{job_id}/{filename}"
         req = urllib.request.Request(url, method="GET")
         dest_path = os.path.join(dest_dir, filename)
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             with open(dest_path, "wb") as f:
                 f.write(resp.read())
         print(f"[agent] dataset downloaded: {filename}")
         return dest_path
     except Exception as e:
-        print(f"[agent] ERROR: dataset download failed: {url} -> {e}")
+        print(f"[agent] ERROR: dataset download failed: {e}")
         return None
 
 def upload_output_file(job_id: str, filepath: str):
@@ -184,7 +184,9 @@ async def send_heartbeats(ws):
             break
         await asyncio.sleep(5)
 
-async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gpu: bool = False, resume_from_epoch: int = 0, coordinator_url: str = None, dataset_filename: str = None, output_extensions: list = None):
+async def run_job(ws, job_id, script, requirements=None, use_gpu=False,
+                  resume_from_epoch=0, coordinator_url=None,
+                  dataset_filename=None, output_extensions=None, dataset_url=None):
     global COORDINATOR_HTTP
     if coordinator_url:
         COORDINATOR_HTTP = coordinator_url
@@ -215,25 +217,25 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
         f.write(script)
 
     if dataset_filename:
-        dataset_dest = download_dataset(job_id, dataset_filename, tmpdir)
-        if dataset_dest:
+        if dataset_url:
+            dest_path = os.path.join(tmpdir, dataset_filename)
             try:
-                await ws.send(json.dumps({
-                    "type": "log",
-                    "job_id": job_id,
-                    "line": f"[agent] dataset loaded: {dataset_filename}"
-                }))
-            except Exception:
-                pass
+                req = urllib.request.Request(dataset_url, method="GET")
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    with open(dest_path, "wb") as f:
+                        f.write(resp.read())
+                print(f"[agent] dataset downloaded from cloudinary: {dataset_filename}")
+                await ws.send(json.dumps({"type": "log", "job_id": job_id,
+                    "line": f"[agent] dataset loaded: {dataset_filename}"}))
+            except Exception as e:
+                print(f"[agent] dataset download failed: {e}")
+                await ws.send(json.dumps({"type": "log", "job_id": job_id,
+                    "line": f"[agent] warning: dataset could not be loaded — {e}"}))
         else:
-            try:
-                await ws.send(json.dumps({
-                    "type": "log",
-                    "job_id": job_id,
-                    "line": f"[agent] warning: dataset {dataset_filename} could not be loaded"
-                }))
-            except Exception:
-                pass
+            dataset_dest = download_dataset(job_id, dataset_filename, tmpdir)
+            if dataset_dest:
+                await ws.send(json.dumps({"type": "log", "job_id": job_id,
+                    "line": f"[agent] dataset loaded: {dataset_filename}"}))
 
     mount_path = tmpdir.replace("\\", "/")
     if platform.system() == "Windows" and mount_path[1] == ":":
@@ -295,7 +297,6 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
 
     print(f"[agent] running job {job_id}")
     print(f"[agent] cmd: {' '.join(docker_cmd)}")
-    print(f"[agent] resource caps: cpus={MAX_CPUS} memory={MAX_RAM_GB}g gpu={'yes' if use_gpu else 'no'} network={'bridge' if requirements else 'none'}")
 
     if requirements:
         try:
@@ -311,11 +312,6 @@ async def run_job(ws, job_id: str, script: str, requirements: str = None, use_gp
                 "type": "log",
                 "job_id": job_id,
                 "line": f"[agent] GPU acceleration enabled — {gpu_label} (compound-gpu:latest / cuda:12.1.1-cudnn8)"
-            }))
-            await ws.send(json.dumps({
-                "type": "log",
-                "job_id": job_id,
-                "line": "[agent] torch + CUDA deps pre-baked in image — only user requirements will be installed"
             }))
         except Exception:
             pass
@@ -419,7 +415,10 @@ async def main():
                             coordinator_url = msg.get("coordinator_url")
                             dataset_filename = msg.get("dataset_filename")
                             output_extensions = msg.get("output_extensions", [])
-                            await run_job(ws, job_id, script, requirements, use_gpu, resume_from_epoch, coordinator_url, dataset_filename, output_extensions)
+                            dataset_url = msg.get("dataset_url")
+                            await run_job(ws, job_id, script, requirements, use_gpu,
+                                          resume_from_epoch, coordinator_url,
+                                          dataset_filename, output_extensions, dataset_url)
                 except websockets.ConnectionClosed:
                     print("[agent] connection closed")
                 finally:
